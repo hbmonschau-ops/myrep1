@@ -81,10 +81,14 @@ echo  Starte Bank Account Manager...
 echo ============================================================
 echo.
 !PYTHON! "%~dp0bank_manager.py"
+set APP_EXIT=%errorlevel%
 
-if errorlevel 1 (
-    echo.
-    echo Die Anwendung wurde mit einem Fehler beendet.
-    pause
+echo.
+if !APP_EXIT! neq 0 (
+    echo FEHLER: Anwendung beendet mit Code !APP_EXIT!
+) else (
+    echo Anwendung normal beendet.
 )
+echo.
+pause
 endlocal
