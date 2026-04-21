@@ -1,6 +1,6 @@
 """
 Bank Account Manager - Windows Desktop Application
-Verwaltung von Bankzugängen mit PDF-Export
+Verwaltung von Bankzugängen, Verträgen und Versicherungen mit PDF-Export
 """
 
 import tkinter as tk
@@ -21,14 +21,15 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.enums import TA_CENTER
 
 
-# --- Datenbankpfad ---
+# ---------------------------------------------------------------------------
+# Datenbankpfad & Verschlüsselung
+# ---------------------------------------------------------------------------
 APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "BankAccountManager"
 APP_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = APP_DIR / "bankaccounts.db"
+DB_PATH  = APP_DIR / "bankaccounts.db"
 KEY_FILE = APP_DIR / "key.bin"
 
 
-# --- Verschlüsselung ---
 def _get_or_create_key() -> bytes:
     if KEY_FILE.exists():
         return KEY_FILE.read_bytes()
@@ -40,12 +41,7 @@ def _get_or_create_key() -> bytes:
     return salt + key
 
 
-def _load_fernet() -> Fernet:
-    data = _get_or_create_key()
-    return Fernet(data[16:])
-
-
-FERNET = _load_fernet()
+FERNET = Fernet(_get_or_create_key()[16:])
 
 
 def encrypt(plaintext: str) -> str:
@@ -56,16 +52,20 @@ def decrypt(token: str) -> str:
     try:
         return FERNET.decrypt(token.encode()).decode()
     except Exception:
-        return "*** Fehler beim Entschlüsseln ***"
+        return "*** Fehler ***"
 
 
-# --- Datenbank ---
+# ---------------------------------------------------------------------------
+# Datenbank
+# ---------------------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
+
+    # --- Bankkonten ---
     conn.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            bank_name       TEXT    NOT NULL,
+            bank_name       TEXT NOT NULL,
             account_number  TEXT,
             login_url       TEXT,
             username        TEXT,
@@ -76,143 +76,138 @@ def init_db():
             created_at      TEXT DEFAULT (datetime('now','localtime'))
         )
     """)
-    # Migration: Kontonummer zu bestehender Datenbank hinzufügen
-    try:
-        conn.execute("ALTER TABLE accounts ADD COLUMN account_number TEXT")
-    except sqlite3.OperationalError:
-        pass
+    for col in ("account_number",):
+        try:
+            conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+    # --- Verträge & Versicherungen ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS contracts (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            category        TEXT,
+            name            TEXT NOT NULL,
+            provider        TEXT,
+            contract_number TEXT,
+            login_url       TEXT,
+            username        TEXT,
+            password        TEXT,
+            amount          REAL,
+            interval        TEXT,
+            start_date      TEXT,
+            end_date        TEXT,
+            notice_period   TEXT,
+            notes           TEXT,
+            created_at      TEXT DEFAULT (datetime('now','localtime'))
+        )
+    """)
+
     conn.commit()
     conn.close()
 
 
+# --- Bankkonten CRUD ---
 def get_all_accounts():
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
         "SELECT id, bank_name, account_number, login_url, username, "
-        "password, balance, balance_date, notes "
-        "FROM accounts ORDER BY bank_name"
+        "password, balance, balance_date, notes FROM accounts ORDER BY bank_name"
     ).fetchall()
     conn.close()
     return rows
 
 
-def insert_account(bank_name, account_number, login_url, username, password,
-                   balance, balance_date, notes):
-    enc_password = encrypt(password) if password else ""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "INSERT INTO accounts "
-        "(bank_name, account_number, login_url, username, password, balance, balance_date, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (bank_name, account_number, login_url, username, enc_password, balance, balance_date, notes)
-    )
-    conn.commit()
-    conn.close()
-
-
-def update_account(account_id, bank_name, account_number, login_url, username,
+def insert_account(bank_name, account_number, login_url, username,
                    password, balance, balance_date, notes):
-    enc_password = encrypt(password) if password else ""
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "UPDATE accounts SET bank_name=?, account_number=?, login_url=?, username=?, "
-        "password=?, balance=?, balance_date=?, notes=? WHERE id=?",
-        (bank_name, account_number, login_url, username, enc_password,
-         balance, balance_date, notes, account_id)
+        "INSERT INTO accounts (bank_name,account_number,login_url,username,"
+        "password,balance,balance_date,notes) VALUES (?,?,?,?,?,?,?,?)",
+        (bank_name, account_number, login_url, username,
+         encrypt(password) if password else "",
+         balance, balance_date, notes)
     )
     conn.commit()
     conn.close()
 
 
-def delete_account(account_id):
+def update_account(aid, bank_name, account_number, login_url, username,
+                   password, balance, balance_date, notes):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+    conn.execute(
+        "UPDATE accounts SET bank_name=?,account_number=?,login_url=?,username=?,"
+        "password=?,balance=?,balance_date=?,notes=? WHERE id=?",
+        (bank_name, account_number, login_url, username,
+         encrypt(password) if password else "",
+         balance, balance_date, notes, aid)
+    )
     conn.commit()
     conn.close()
 
 
-# --- PDF-Export ---
-def export_pdf(filepath: str, accounts: list, show_passwords: bool):
-    doc = SimpleDocTemplate(
-        filepath,
-        pagesize=landscape(A4),
-        leftMargin=2 * cm, rightMargin=2 * cm,
-        topMargin=2.5 * cm, bottomMargin=2 * cm,
+def delete_account(aid):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM accounts WHERE id=?", (aid,))
+    conn.commit()
+    conn.close()
+
+
+# --- Verträge CRUD ---
+def get_all_contracts():
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT id,category,name,provider,contract_number,login_url,username,"
+        "password,amount,interval,start_date,end_date,notice_period,notes "
+        "FROM contracts ORDER BY category,name"
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def insert_contract(category, name, provider, contract_number, login_url,
+                    username, password, amount, interval, start_date,
+                    end_date, notice_period, notes):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO contracts (category,name,provider,contract_number,login_url,"
+        "username,password,amount,interval,start_date,end_date,notice_period,notes) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (category, name, provider, contract_number, login_url, username,
+         encrypt(password) if password else "",
+         amount, interval, start_date, end_date, notice_period, notes)
     )
+    conn.commit()
+    conn.close()
 
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        "title", parent=styles["Heading1"],
-        fontSize=18, spaceAfter=6, alignment=TA_CENTER,
-        textColor=colors.HexColor("#1a3c5e")
+
+def update_contract(cid, category, name, provider, contract_number, login_url,
+                    username, password, amount, interval, start_date,
+                    end_date, notice_period, notes):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE contracts SET category=?,name=?,provider=?,contract_number=?,"
+        "login_url=?,username=?,password=?,amount=?,interval=?,start_date=?,"
+        "end_date=?,notice_period=?,notes=? WHERE id=?",
+        (category, name, provider, contract_number, login_url, username,
+         encrypt(password) if password else "",
+         amount, interval, start_date, end_date, notice_period, notes, cid)
     )
-    subtitle_style = ParagraphStyle(
-        "subtitle", parent=styles["Normal"],
-        fontSize=9, spaceAfter=16, alignment=TA_CENTER, textColor=colors.grey
-    )
-    cell_style = ParagraphStyle("cell", parent=styles["Normal"], fontSize=8, leading=11)
-
-    elements = []
-    elements.append(Paragraph("Bank Account Manager", title_style))
-    elements.append(Paragraph(
-        f"Erstellt am {datetime.now().strftime('%d.%m.%Y  %H:%M')} Uhr  |  "
-        f"{len(accounts)} Konto/Konten",
-        subtitle_style
-    ))
-
-    headers = ["Bank", "Kontonummer", "Login-URL", "Benutzername",
-               "Passwort", "Kontostand", "Stand-Datum"]
-    # Gesamtbreite A4 quer: 25.7 cm nutzbar
-    col_widths = [4.0*cm, 3.5*cm, 5.2*cm, 4.0*cm, 3.5*cm, 2.8*cm, 2.7*cm]
-
-    table_data = [headers]
-    for row in accounts:
-        _, bank_name, account_number, login_url, username, pw_enc, balance, balance_date, _ = row
-        pw = decrypt(pw_enc) if show_passwords and pw_enc else ("●" * 8 if pw_enc else "")
-        bal_str = (
-            f"{balance:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
-            if balance is not None else ""
-        )
-        table_data.append([
-            Paragraph(bank_name or "", cell_style),
-            Paragraph(account_number or "", cell_style),
-            Paragraph(login_url or "", cell_style),
-            Paragraph(username or "", cell_style),
-            Paragraph(pw, cell_style),
-            Paragraph(bal_str, cell_style),
-            Paragraph(balance_date or "", cell_style),
-        ])
-
-    header_bg = colors.HexColor("#1a3c5e")
-    row_alt   = colors.HexColor("#eef3f8")
-
-    t = Table(table_data, colWidths=col_widths, repeatRows=1)
-    t.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, 0), header_bg),
-        ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
-        ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE",      (0, 0), (-1, 0), 9),
-        ("TOPPADDING",    (0, 0), (-1, 0), 7),
-        ("BOTTOMPADDING", (0, 0), (-1, 0), 7),
-        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#aabbcc")),
-        ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, row_alt]),
-        ("FONTSIZE",      (0, 1), (-1, -1), 8),
-    ]))
-    elements.append(t)
-
-    if not show_passwords:
-        elements.append(Spacer(1, 0.5 * cm))
-        elements.append(Paragraph(
-            "Hinweis: Passwörter wurden aus Sicherheitsgründen nicht im Klartext exportiert.",
-            ParagraphStyle("hint", parent=styles["Normal"], fontSize=7, textColor=colors.grey)
-        ))
-
-    doc.build(elements)
+    conn.commit()
+    conn.close()
 
 
-# --- Hilfsfunktionen ---
-def format_balance(value) -> str:
+def delete_contract(cid):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM contracts WHERE id=?", (cid,))
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Hilfsfunktionen
+# ---------------------------------------------------------------------------
+def format_amount(value) -> str:
     if value is None:
         return ""
     try:
@@ -221,7 +216,7 @@ def format_balance(value) -> str:
         return ""
 
 
-def parse_balance(text: str):
+def parse_amount(text: str):
     text = text.strip().replace("€", "").replace(" ", "").replace(".", "").replace(",", ".")
     if not text:
         return None
@@ -231,72 +226,182 @@ def parse_balance(text: str):
         return None
 
 
-# --- Dialog: Konto hinzufügen / bearbeiten ---
-class AccountDialog(tk.Toplevel):
-    def __init__(self, parent, title: str, data: dict = None):
+# ---------------------------------------------------------------------------
+# PDF-Export Bankkonten
+# ---------------------------------------------------------------------------
+def export_accounts_pdf(filepath: str, accounts: list, show_passwords: bool):
+    doc = SimpleDocTemplate(filepath, pagesize=landscape(A4),
+                            leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2.5*cm, bottomMargin=2*cm)
+    styles = getSampleStyleSheet()
+    title_s = ParagraphStyle("t", parent=styles["Heading1"], fontSize=16,
+                             spaceAfter=4, alignment=TA_CENTER,
+                             textColor=colors.HexColor("#1a3c5e"))
+    sub_s   = ParagraphStyle("s", parent=styles["Normal"], fontSize=9,
+                             spaceAfter=14, alignment=TA_CENTER,
+                             textColor=colors.grey)
+    cell_s  = ParagraphStyle("c", parent=styles["Normal"], fontSize=8, leading=11)
+
+    elements = [
+        Paragraph("Bank Account Manager – Bankkonten", title_s),
+        Paragraph(f"Erstellt am {datetime.now().strftime('%d.%m.%Y  %H:%M')} Uhr  |  "
+                  f"{len(accounts)} Konto/Konten", sub_s),
+    ]
+    headers   = ["Bank", "Kontonummer", "Login-URL", "Benutzername",
+                 "Passwort", "Kontostand", "Stand-Datum"]
+    col_widths = [4.0*cm, 3.5*cm, 5.2*cm, 4.0*cm, 3.5*cm, 2.8*cm, 2.7*cm]
+    data = [headers]
+    for row in accounts:
+        _, bank_name, account_number, login_url, username, pw_enc, balance, balance_date, _ = row
+        pw = decrypt(pw_enc) if show_passwords and pw_enc else ("●"*8 if pw_enc else "")
+        bal = (f"{balance:,.2f} €".replace(",","X").replace(".",",").replace("X",".")
+               if balance is not None else "")
+        data.append([Paragraph(v or "", cell_s) for v in
+                     [bank_name, account_number, login_url, username, pw, bal, balance_date]])
+    _build_pdf(doc, elements, data, col_widths, show_passwords)
+
+
+# ---------------------------------------------------------------------------
+# PDF-Export Verträge
+# ---------------------------------------------------------------------------
+def export_contracts_pdf(filepath: str, contracts: list, show_passwords: bool):
+    doc = SimpleDocTemplate(filepath, pagesize=landscape(A4),
+                            leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2.5*cm, bottomMargin=2*cm)
+    styles = getSampleStyleSheet()
+    title_s = ParagraphStyle("t", parent=styles["Heading1"], fontSize=16,
+                             spaceAfter=4, alignment=TA_CENTER,
+                             textColor=colors.HexColor("#1a3c5e"))
+    sub_s   = ParagraphStyle("s", parent=styles["Normal"], fontSize=9,
+                             spaceAfter=14, alignment=TA_CENTER,
+                             textColor=colors.grey)
+    cell_s  = ParagraphStyle("c", parent=styles["Normal"], fontSize=8, leading=11)
+
+    elements = [
+        Paragraph("Bank Account Manager – Verträge & Versicherungen", title_s),
+        Paragraph(f"Erstellt am {datetime.now().strftime('%d.%m.%Y  %H:%M')} Uhr  |  "
+                  f"{len(contracts)} Einträge", sub_s),
+    ]
+    headers   = ["Kategorie", "Bezeichnung", "Anbieter", "Vertragsnr.",
+                 "Betrag", "Rhythmus", "Beginn", "Ende", "Kündigung"]
+    col_widths = [2.8*cm, 4.0*cm, 3.5*cm, 3.0*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.4*cm]
+    data = [headers]
+    for row in contracts:
+        _, category, name, provider, contract_number, _, _, _, amount, interval, \
+            start_date, end_date, notice_period, _ = row
+        amt = (f"{amount:,.2f} €".replace(",","X").replace(".",",").replace("X",".")
+               if amount is not None else "")
+        data.append([Paragraph(v or "", cell_s) for v in
+                     [category, name, provider, contract_number,
+                      amt, interval, start_date, end_date, notice_period]])
+    _build_pdf(doc, elements, data, col_widths, show_passwords)
+
+
+def _build_pdf(doc, elements, data, col_widths, show_passwords):
+    styles = getSampleStyleSheet()
+    t = Table(data, colWidths=col_widths, repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND",    (0,0),(-1,0), colors.HexColor("#1a3c5e")),
+        ("TEXTCOLOR",     (0,0),(-1,0), colors.white),
+        ("FONTNAME",      (0,0),(-1,0), "Helvetica-Bold"),
+        ("FONTSIZE",      (0,0),(-1,0), 9),
+        ("TOPPADDING",    (0,0),(-1,0), 7),
+        ("BOTTOMPADDING", (0,0),(-1,0), 7),
+        ("GRID",          (0,0),(-1,-1), 0.4, colors.HexColor("#aabbcc")),
+        ("VALIGN",        (0,0),(-1,-1), "TOP"),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, colors.HexColor("#eef3f8")]),
+        ("FONTSIZE",      (0,1),(-1,-1), 8),
+    ]))
+    elements.append(t)
+    if not show_passwords:
+        elements.append(Spacer(1, 0.5*cm))
+        elements.append(Paragraph(
+            "Passwörter wurden aus Sicherheitsgründen nicht im Klartext exportiert.",
+            ParagraphStyle("h", parent=styles["Normal"], fontSize=7, textColor=colors.grey)
+        ))
+    doc.build(elements)
+
+
+# ---------------------------------------------------------------------------
+# Dialog-Basisklasse
+# ---------------------------------------------------------------------------
+class BaseDialog(tk.Toplevel):
+    def __init__(self, parent, title: str):
         super().__init__(parent)
         self.title(title)
         self.resizable(False, False)
         self.grab_set()
         self.result = None
-        self._build_ui(data or {})
+
+    def _center(self, parent):
         self.update_idletasks()
         x = parent.winfo_rootx() + (parent.winfo_width()  - self.winfo_width())  // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{x}+{y}")
 
-    def _build_ui(self, data: dict):
-        pad = {"padx": 10, "pady": 4}
+    def _add_field(self, frame, row, label, key, is_pw=False, width=34):
+        pad = {"padx": 10, "pady": 3}
+        ttk.Label(frame, text=label, width=28, anchor="w").grid(
+            row=row, column=0, sticky="w", **pad)
+        var = tk.StringVar(value=self._data.get(key, ""))
+        self._vars[key] = var
+        e = ttk.Entry(frame, textvariable=var, width=width,
+                      show="●" if is_pw else "")
+        e.grid(row=row, column=1, sticky="ew", **pad)
+        return e
+
+    def _add_combo(self, frame, row, label, key, values, width=34):
+        pad = {"padx": 10, "pady": 3}
+        ttk.Label(frame, text=label, width=28, anchor="w").grid(
+            row=row, column=0, sticky="w", **pad)
+        var = tk.StringVar(value=self._data.get(key, ""))
+        self._vars[key] = var
+        cb = ttk.Combobox(frame, textvariable=var, values=values, width=width-2, state="normal")
+        cb.grid(row=row, column=1, sticky="ew", **pad)
+        return cb
+
+
+# ---------------------------------------------------------------------------
+# Dialog: Bankkonto
+# ---------------------------------------------------------------------------
+class AccountDialog(BaseDialog):
+    def __init__(self, parent, title: str, data: dict = None):
+        super().__init__(parent, title)
+        self._data = data or {}
+        self._vars = {}
+        self._build_ui()
+        self._center(parent)
+
+    def _build_ui(self):
         frame = ttk.Frame(self, padding=16)
         frame.pack(fill=tk.BOTH, expand=True)
+        first = self._add_field(frame, 0, "Bankname *",               "bank_name")
+        self._add_field(frame, 1, "Kontonummer",                  "account_number")
+        self._add_field(frame, 2, "Login-URL",                    "login_url")
+        self._add_field(frame, 3, "Benutzername",                 "username")
+        self._add_field(frame, 4, "Passwort",                     "password", is_pw=True)
+        self._add_field(frame, 5, "Kontostand (€)",               "balance")
+        self._add_field(frame, 6, "Stand-Datum (TT.MM.JJJJ)",    "balance_date")
+        ttk.Label(frame, text="Notizen", anchor="w").grid(row=7, column=0, sticky="nw", padx=10, pady=3)
+        self._notes = tk.Text(frame, width=34, height=3, font=("Segoe UI", 9))
+        self._notes.grid(row=7, column=1, sticky="ew", padx=10, pady=3)
+        self._notes.insert("1.0", self._data.get("notes", ""))
+        btn = ttk.Frame(frame)
+        btn.grid(row=8, column=0, columnspan=2, pady=(12, 0))
+        ttk.Button(btn, text="Speichern",  command=self._save,   width=14).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn, text="Abbrechen",  command=self.destroy, width=14).pack(side=tk.LEFT, padx=6)
+        first.focus()
 
-        fields = [
-            ("Bankname *",                "bank_name",      False),
-            ("Kontonummer",               "account_number", False),
-            ("Login-URL",                 "login_url",      False),
-            ("Benutzername",              "username",       False),
-            ("Passwort",                  "password",       True),
-            ("Kontostand (€)",            "balance",        False),
-            ("Stand-Datum (TT.MM.JJJJ)", "balance_date",   False),
-        ]
-
-        self._vars = {}
-        for row_idx, (label, key, is_pw) in enumerate(fields):
-            ttk.Label(frame, text=label, width=26, anchor="w").grid(
-                row=row_idx, column=0, sticky="w", **pad
-            )
-            var = tk.StringVar(value=data.get(key, ""))
-            self._vars[key] = var
-            entry = ttk.Entry(frame, textvariable=var, width=36,
-                              show="●" if is_pw else "")
-            entry.grid(row=row_idx, column=1, sticky="ew", **pad)
-            if row_idx == 0:
-                entry.focus()
-
-        ttk.Label(frame, text="Notizen", anchor="w").grid(
-            row=len(fields), column=0, sticky="nw", **pad
-        )
-        self._notes_text = tk.Text(frame, width=36, height=3, font=("Segoe UI", 9))
-        self._notes_text.grid(row=len(fields), column=1, sticky="ew", **pad)
-        self._notes_text.insert("1.0", data.get("notes", ""))
-
-        btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=len(fields) + 1, column=0, columnspan=2, pady=(12, 0))
-        ttk.Button(btn_frame, text="Speichern",  command=self._on_save,  width=14).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btn_frame, text="Abbrechen",  command=self.destroy,   width=14).pack(side=tk.LEFT, padx=6)
-
-    def _on_save(self):
+    def _save(self):
         bank_name = self._vars["bank_name"].get().strip()
         if not bank_name:
-            messagebox.showwarning("Pflichtfeld", "Bitte einen Banknamen eingeben.", parent=self)
+            messagebox.showwarning("Pflichtfeld", "Bitte Banknamen eingeben.", parent=self)
             return
-
-        balance_text = self._vars["balance"].get().strip()
-        balance = parse_balance(balance_text) if balance_text else None
-        if balance_text and balance is None:
-            messagebox.showwarning("Ungültig", "Der Kontostand enthält ungültige Zeichen.", parent=self)
+        bal_text = self._vars["balance"].get().strip()
+        balance  = parse_amount(bal_text) if bal_text else None
+        if bal_text and balance is None:
+            messagebox.showwarning("Ungültig", "Ungültiger Kontostand.", parent=self)
             return
-
         self.result = {
             "bank_name":      bank_name,
             "account_number": self._vars["account_number"].get().strip(),
@@ -305,248 +410,431 @@ class AccountDialog(tk.Toplevel):
             "password":       self._vars["password"].get(),
             "balance":        balance,
             "balance_date":   self._vars["balance_date"].get().strip(),
-            "notes":          self._notes_text.get("1.0", "end-1c").strip(),
+            "notes":          self._notes.get("1.0", "end-1c").strip(),
         }
         self.destroy()
 
 
-# --- Hauptfenster ---
-class BankManagerApp(tk.Tk):
-    COLUMNS = ("bank_name", "account_number", "login_url", "username", "balance", "balance_date")
-    COL_LABELS = {
-        "bank_name":      "Bank",
-        "account_number": "Kontonummer",
-        "login_url":      "Login-URL",
-        "username":       "Benutzername",
-        "balance":        "Kontostand",
-        "balance_date":   "Stand-Datum",
-    }
-    COL_WIDTHS = {
-        "bank_name":      150,
-        "account_number": 130,
-        "login_url":      200,
-        "username":       130,
-        "balance":        100,
-        "balance_date":    95,
-    }
+# ---------------------------------------------------------------------------
+# Dialog: Vertrag / Versicherung
+# ---------------------------------------------------------------------------
+CATEGORIES   = ["Versicherung", "Vertrag", "Abonnement", "Mobilfunk",
+                 "Internet", "Strom/Gas", "Sonstiges"]
+INTERVALS    = ["monatlich", "vierteljährlich", "halbjährlich", "jährlich", "einmalig"]
 
-    # Toolbar-Farben (tk.Button respektiert diese, ttk.Button ignoriert sie auf Windows)
-    TB_BG        = "#1a3c5e"   # Toolbar-Hintergrund
-    BTN_BG       = "#f0f4f8"   # Button-Hintergrund (helles Grau-Blau)
-    BTN_FG       = "#1a3c5e"   # Button-Text (dunkles Blau)
-    BTN_ACTIVE   = "#d0dce8"   # Button hover
 
-    def __init__(self):
-        super().__init__()
-        self.title("Bank Account Manager")
-        self.geometry("980x560")
-        self.minsize(780, 420)
-        self._configure_style()
+class ContractDialog(BaseDialog):
+    def __init__(self, parent, title: str, data: dict = None):
+        super().__init__(parent, title)
+        self._data = data or {}
+        self._vars = {}
         self._build_ui()
-        self._load_accounts()
+        self._center(parent)
 
-    def _configure_style(self):
-        style = ttk.Style(self)
-        try:
-            style.theme_use("vista")
-        except tk.TclError:
-            try:
-                style.theme_use("clam")
-            except tk.TclError:
-                pass
+    def _build_ui(self):
+        frame = ttk.Frame(self, padding=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+        self._add_combo(frame, 0, "Kategorie",                  "category",      CATEGORIES)
+        first = self._add_field(frame, 1, "Bezeichnung *",      "name")
+        self._add_field(frame, 2, "Anbieter",                   "provider")
+        self._add_field(frame, 3, "Vertragsnummer",             "contract_number")
+        self._add_field(frame, 4, "Login-URL",                  "login_url")
+        self._add_field(frame, 5, "Benutzername",               "username")
+        self._add_field(frame, 6, "Passwort",                   "password",      is_pw=True)
+        self._add_field(frame, 7, "Betrag (€)",                 "amount")
+        self._add_combo(frame, 8, "Zahlungsrhythmus",           "interval",      INTERVALS)
+        self._add_field(frame, 9, "Vertragsbeginn (TT.MM.JJJJ)","start_date")
+        self._add_field(frame,10, "Vertragsende  (TT.MM.JJJJ)", "end_date")
+        self._add_field(frame,11, "Kündigungsfrist",            "notice_period")
+        ttk.Label(frame, text="Notizen", anchor="w").grid(row=12, column=0, sticky="nw", padx=10, pady=3)
+        self._notes = tk.Text(frame, width=34, height=3, font=("Segoe UI", 9))
+        self._notes.grid(row=12, column=1, sticky="ew", padx=10, pady=3)
+        self._notes.insert("1.0", self._data.get("notes", ""))
+        btn = ttk.Frame(frame)
+        btn.grid(row=13, column=0, columnspan=2, pady=(12, 0))
+        ttk.Button(btn, text="Speichern",  command=self._save,   width=14).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn, text="Abbrechen",  command=self.destroy, width=14).pack(side=tk.LEFT, padx=6)
+        first.focus()
 
-    def _toolbar_button(self, parent, text, command):
-        return tk.Button(
-            parent, text=text, command=command,
-            bg=self.BTN_BG, fg=self.BTN_FG,
-            activebackground=self.BTN_ACTIVE, activeforeground=self.BTN_FG,
-            font=("Segoe UI", 9, "bold"),
-            relief="flat", bd=0,
-            padx=12, pady=5,
-            cursor="hand2",
-        )
+    def _save(self):
+        name = self._vars["name"].get().strip()
+        if not name:
+            messagebox.showwarning("Pflichtfeld", "Bitte Bezeichnung eingeben.", parent=self)
+            return
+        amt_text = self._vars["amount"].get().strip()
+        amount   = parse_amount(amt_text) if amt_text else None
+        if amt_text and amount is None:
+            messagebox.showwarning("Ungültig", "Ungültiger Betrag.", parent=self)
+            return
+        self.result = {
+            "category":       self._vars["category"].get().strip(),
+            "name":           name,
+            "provider":       self._vars["provider"].get().strip(),
+            "contract_number":self._vars["contract_number"].get().strip(),
+            "login_url":      self._vars["login_url"].get().strip(),
+            "username":       self._vars["username"].get().strip(),
+            "password":       self._vars["password"].get(),
+            "amount":         amount,
+            "interval":       self._vars["interval"].get().strip(),
+            "start_date":     self._vars["start_date"].get().strip(),
+            "end_date":       self._vars["end_date"].get().strip(),
+            "notice_period":  self._vars["notice_period"].get().strip(),
+            "notes":          self._notes.get("1.0", "end-1c").strip(),
+        }
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Gemeinsame Farben
+# ---------------------------------------------------------------------------
+TB_BG      = "#1a3c5e"
+BTN_BG     = "#f0f4f8"
+BTN_FG     = "#1a3c5e"
+BTN_ACTIVE = "#d0dce8"
+
+
+def toolbar_btn(parent, text, command):
+    return tk.Button(parent, text=text, command=command,
+                     bg=BTN_BG, fg=BTN_FG,
+                     activebackground=BTN_ACTIVE, activeforeground=BTN_FG,
+                     font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
+                     padx=12, pady=5, cursor="hand2")
+
+
+# ---------------------------------------------------------------------------
+# Tab: Bankkonten
+# ---------------------------------------------------------------------------
+class AccountsTab(ttk.Frame):
+    COLUMNS    = ("bank_name","account_number","login_url","username","balance","balance_date")
+    COL_LABELS = {"bank_name":"Bank","account_number":"Kontonummer","login_url":"Login-URL",
+                  "username":"Benutzername","balance":"Kontostand","balance_date":"Stand-Datum"}
+    COL_WIDTHS = {"bank_name":150,"account_number":120,"login_url":190,
+                  "username":130,"balance":100,"balance_date":90}
+    DB_IDX     = {"bank_name":1,"account_number":2,"login_url":3,
+                  "username":4,"balance":6,"balance_date":7}
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._rows: list = []
+        self._sort_col, self._sort_asc = "bank_name", True
+        self._build_ui()
+        self.load()
 
     def _build_ui(self):
         # Toolbar
-        toolbar = tk.Frame(self, bg=self.TB_BG, height=44)
-        toolbar.pack(fill=tk.X, side=tk.TOP)
-        toolbar.pack_propagate(False)
+        tb = tk.Frame(self, bg=TB_BG, height=40)
+        tb.pack(fill=tk.X)
+        tb.pack_propagate(False)
+        toolbar_btn(tb, "＋  Neu",        self._add).pack(side=tk.LEFT, padx=(8,2), pady=5)
+        toolbar_btn(tb, "✎  Bearbeiten",  self._edit).pack(side=tk.LEFT, padx=2, pady=5)
+        toolbar_btn(tb, "✕  Löschen",     self._delete).pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Frame(tb, bg="#3a6a94", width=1).pack(side=tk.LEFT, fill=tk.Y, pady=6, padx=8)
+        toolbar_btn(tb, "PDF exportieren", self._export_pdf).pack(side=tk.LEFT, padx=2, pady=5)
 
-        self._toolbar_button(toolbar, "＋  Neu",          self._add_account).pack(side=tk.LEFT, padx=(8, 2), pady=6)
-        self._toolbar_button(toolbar, "✎  Bearbeiten",    self._edit_account).pack(side=tk.LEFT, padx=2, pady=6)
-        self._toolbar_button(toolbar, "✕  Löschen",       self._delete_account).pack(side=tk.LEFT, padx=2, pady=6)
-        tk.Frame(toolbar, bg="#3a6a94", width=1).pack(side=tk.LEFT, fill=tk.Y, pady=8, padx=8)
-        self._toolbar_button(toolbar, "PDF exportieren",  self._export_pdf).pack(side=tk.LEFT, padx=2, pady=6)
-
-        # Suchleiste
-        search_frame = ttk.Frame(self, padding=(8, 6, 8, 0))
-        search_frame.pack(fill=tk.X)
-        ttk.Label(search_frame, text="Suche:").pack(side=tk.LEFT)
-        self._search_var = tk.StringVar()
-        self._search_var.trace_add("write", lambda *_: self._filter())
-        ttk.Entry(search_frame, textvariable=self._search_var, width=30).pack(side=tk.LEFT, padx=6)
-        ttk.Button(search_frame, text="✕", width=3,
-                   command=lambda: self._search_var.set("")).pack(side=tk.LEFT)
+        # Suche
+        sf = ttk.Frame(self, padding=(8,5,8,0))
+        sf.pack(fill=tk.X)
+        ttk.Label(sf, text="Suche:").pack(side=tk.LEFT)
+        self._search = tk.StringVar()
+        self._search.trace_add("write", lambda *_: self._filter())
+        ttk.Entry(sf, textvariable=self._search, width=28).pack(side=tk.LEFT, padx=6)
+        ttk.Button(sf, text="✕", width=3, command=lambda: self._search.set("")).pack(side=tk.LEFT)
 
         # Tabelle
-        tree_frame = ttk.Frame(self, padding=(8, 4, 8, 0))
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-
-        self._tree = ttk.Treeview(
-            tree_frame, columns=self.COLUMNS, show="headings", selectmode="browse"
-        )
-        for col in self.COLUMNS:
-            self._tree.heading(col, text=self.COL_LABELS[col],
-                               command=lambda c=col: self._sort_by(c))
-            self._tree.column(col, width=self.COL_WIDTHS[col], minwidth=60)
-
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self._tree.yview)
+        tf = ttk.Frame(self, padding=(8,4,8,0))
+        tf.pack(fill=tk.BOTH, expand=True)
+        self._tree = ttk.Treeview(tf, columns=self.COLUMNS, show="headings", selectmode="browse")
+        for c in self.COLUMNS:
+            self._tree.heading(c, text=self.COL_LABELS[c], command=lambda x=c: self._sort(x))
+            self._tree.column(c, width=self.COL_WIDTHS[c], minwidth=50)
+        vsb = ttk.Scrollbar(tf, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self._tree.pack(fill=tk.BOTH, expand=True)
-        self._tree.bind("<Double-1>", lambda _e: self._edit_account())
-        self._tree.bind("<Delete>",   lambda _e: self._delete_account())
+        self._tree.bind("<Double-1>", lambda _: self._edit())
+        self._tree.bind("<Delete>",   lambda _: self._delete())
 
-        # Statuszeile
-        self._status_var = tk.StringVar()
-        ttk.Label(self, textvariable=self._status_var, anchor="w",
-                  padding=(10, 4)).pack(fill=tk.X, side=tk.BOTTOM)
+        self._status = tk.StringVar()
+        ttk.Label(self, textvariable=self._status, anchor="w",
+                  padding=(10,3)).pack(fill=tk.X, side=tk.BOTTOM)
 
-        self._all_rows: list = []
-        self._sort_col = "bank_name"
-        self._sort_asc = True
-
-    # --- Datenzugriff ---
-    def _load_accounts(self):
-        self._all_rows = get_all_accounts()
-        self._refresh_tree(self._all_rows)
-
-    def _refresh_tree(self, rows: list):
-        self._tree.delete(*self._tree.get_children())
-        for row in rows:
-            _, bank_name, account_number, login_url, username, _pw, balance, balance_date, _ = row
-            self._tree.insert("", "end", iid=str(row[0]),
-                               values=(bank_name, account_number, login_url,
-                                       username, format_balance(balance), balance_date))
-        n     = len(rows)
-        total = len(self._all_rows)
-        self._status_var.set(
-            f"{n} Konto/Konten angezeigt" + (f"  (von {total} gesamt)" if n != total else "")
-        )
-
-    def _filter(self):
-        q = self._search_var.get().lower()
-        if not q:
-            self._refresh_tree(self._all_rows)
-            return
-        self._refresh_tree([r for r in self._all_rows
-                            if any(q in str(v).lower() for v in r[1:])])
-
-    def _sort_by(self, col: str):
-        if self._sort_col == col:
-            self._sort_asc = not self._sort_asc
-        else:
-            self._sort_col, self._sort_asc = col, True
-        db_col_map = {
-            "bank_name": 1, "account_number": 2, "login_url": 3,
-            "username": 4, "balance": 6, "balance_date": 7,
-        }
-        db_idx = db_col_map[col]
-        self._all_rows.sort(
-            key=lambda r: (r[db_idx] is None, r[db_idx] if r[db_idx] is not None else ""),
-            reverse=not self._sort_asc,
-        )
+    def load(self):
+        self._rows = get_all_accounts()
         self._filter()
 
-    def _selected_id(self):
-        sel = self._tree.selection()
-        return int(sel[0]) if sel else None
+    def _filter(self):
+        q = self._search.get().lower()
+        shown = self._rows if not q else [r for r in self._rows if any(q in str(v).lower() for v in r[1:])]
+        self._tree.delete(*self._tree.get_children())
+        for r in shown:
+            _, bn, an, lu, un, _, bal, bd, _ = r
+            self._tree.insert("", "end", iid=str(r[0]),
+                               values=(bn, an, lu, un, format_amount(bal), bd))
+        n, tot = len(shown), len(self._rows)
+        self._status.set(f"{n} Einträge" + (f"  (von {tot})" if n != tot else ""))
 
-    def _row_by_id(self, account_id: int):
-        return next((r for r in self._all_rows if r[0] == account_id), None)
+    def _sort(self, col):
+        self._sort_asc = not self._sort_asc if self._sort_col == col else True
+        self._sort_col = col
+        idx = self.DB_IDX[col]
+        self._rows.sort(key=lambda r: (r[idx] is None, r[idx] or ""), reverse=not self._sort_asc)
+        self._filter()
 
-    # --- Aktionen ---
-    def _add_account(self):
-        dlg = AccountDialog(self, "Neuen Bankzugang anlegen")
+    def _sel_id(self):
+        s = self._tree.selection()
+        return int(s[0]) if s else None
+
+    def _row(self, rid):
+        return next((r for r in self._rows if r[0] == rid), None)
+
+    def _add(self):
+        dlg = AccountDialog(self.winfo_toplevel(), "Neues Bankkonto anlegen")
         self.wait_window(dlg)
         if dlg.result:
             d = dlg.result
             insert_account(d["bank_name"], d["account_number"], d["login_url"],
                            d["username"], d["password"], d["balance"],
                            d["balance_date"], d["notes"])
-            self._load_accounts()
+            self.load()
 
-    def _edit_account(self):
-        account_id = self._selected_id()
-        if account_id is None:
-            messagebox.showinfo("Hinweis", "Bitte zuerst einen Eintrag auswählen.")
+    def _edit(self):
+        rid = self._sel_id()
+        if rid is None:
+            messagebox.showinfo("Hinweis", "Bitte einen Eintrag auswählen.")
             return
-        row = self._row_by_id(account_id)
-        if row is None:
-            return
-        _, bank_name, account_number, login_url, username, pw_enc, balance, balance_date, notes = row
-        data = {
-            "bank_name":      bank_name      or "",
-            "account_number": account_number or "",
-            "login_url":      login_url      or "",
-            "username":       username       or "",
-            "password":       decrypt(pw_enc) if pw_enc else "",
-            "balance":        format_balance(balance),
-            "balance_date":   balance_date   or "",
-            "notes":          notes          or "",
-        }
-        dlg = AccountDialog(self, f"Bankzugang bearbeiten – {bank_name}", data)
+        r = self._row(rid)
+        _, bn, an, lu, un, pw_enc, bal, bd, notes = r
+        dlg = AccountDialog(self.winfo_toplevel(), f"Bankkonto bearbeiten – {bn}", {
+            "bank_name": bn or "", "account_number": an or "",
+            "login_url": lu or "", "username": un or "",
+            "password":  decrypt(pw_enc) if pw_enc else "",
+            "balance":   format_amount(bal), "balance_date": bd or "", "notes": notes or "",
+        })
         self.wait_window(dlg)
         if dlg.result:
             d = dlg.result
-            update_account(account_id, d["bank_name"], d["account_number"], d["login_url"],
+            update_account(rid, d["bank_name"], d["account_number"], d["login_url"],
                            d["username"], d["password"], d["balance"],
                            d["balance_date"], d["notes"])
-            self._load_accounts()
+            self.load()
 
-    def _delete_account(self):
-        account_id = self._selected_id()
-        if account_id is None:
-            messagebox.showinfo("Hinweis", "Bitte zuerst einen Eintrag auswählen.")
+    def _delete(self):
+        rid = self._sel_id()
+        if rid is None:
+            messagebox.showinfo("Hinweis", "Bitte einen Eintrag auswählen.")
             return
-        row = self._row_by_id(account_id)
-        bank_name = row[1] if row else str(account_id)
-        if messagebox.askyesno("Löschen bestätigen",
-                               f'Bankzugang „{bank_name}" wirklich löschen?',
-                               icon="warning"):
-            delete_account(account_id)
-            self._load_accounts()
+        r = self._row(rid)
+        if messagebox.askyesno("Löschen", f'Konto „{r[1]}" wirklich löschen?', icon="warning"):
+            delete_account(rid)
+            self.load()
 
     def _export_pdf(self):
-        if not self._all_rows:
-            messagebox.showinfo("Keine Daten", "Es sind keine Bankzugänge vorhanden.")
+        if not self._rows:
+            messagebox.showinfo("Keine Daten", "Keine Bankkonten vorhanden.")
             return
-
-        show_pw = messagebox.askyesno(
-            "PDF-Export",
-            "Sollen Passwörter im Klartext in der PDF erscheinen?\n\n"
-            "Bewahren Sie das Dokument dann sicher auf!",
-            icon="warning",
-        )
-        default_name = f"Bankzugaenge_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-        filepath = filedialog.asksaveasfilename(
-            defaultextension=".pdf",
-            filetypes=[("PDF-Dokument", "*.pdf")],
-            initialfile=default_name,
-            title="PDF speichern unter …",
-        )
-        if not filepath:
+        show_pw = messagebox.askyesno("PDF-Export",
+            "Passwörter im Klartext exportieren?", icon="warning")
+        fp = filedialog.asksaveasfilename(
+            defaultextension=".pdf", filetypes=[("PDF", "*.pdf")],
+            initialfile=f"Bankkonten_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            title="PDF speichern …")
+        if not fp:
             return
         try:
-            export_pdf(filepath, self._all_rows, show_pw)
-            if messagebox.askyesno("Erfolg",
-                                   f"PDF wurde gespeichert:\n{filepath}\n\nJetzt öffnen?"):
-                os.startfile(filepath)
-        except Exception as exc:
-            messagebox.showerror("Fehler beim PDF-Export", str(exc))
+            export_accounts_pdf(fp, self._rows, show_pw)
+            if messagebox.askyesno("Gespeichert", f"PDF gespeichert:\n{fp}\n\nJetzt öffnen?"):
+                os.startfile(fp)
+        except Exception as e:
+            messagebox.showerror("Fehler", str(e))
 
 
-# --- Einstiegspunkt ---
+# ---------------------------------------------------------------------------
+# Tab: Verträge & Versicherungen
+# ---------------------------------------------------------------------------
+class ContractsTab(ttk.Frame):
+    COLUMNS    = ("category","name","provider","contract_number","amount","interval",
+                  "start_date","end_date","notice_period")
+    COL_LABELS = {"category":"Kategorie","name":"Bezeichnung","provider":"Anbieter",
+                  "contract_number":"Vertragsnr.","amount":"Betrag","interval":"Rhythmus",
+                  "start_date":"Beginn","end_date":"Ende","notice_period":"Kündigung"}
+    COL_WIDTHS = {"category":100,"name":160,"provider":130,"contract_number":100,
+                  "amount":90,"interval":90,"start_date":90,"end_date":90,"notice_period":90}
+    DB_IDX     = {"category":1,"name":2,"provider":3,"contract_number":4,
+                  "amount":8,"interval":9,"start_date":10,"end_date":11,"notice_period":12}
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._rows: list = []
+        self._sort_col, self._sort_asc = "category", True
+        self._build_ui()
+        self.load()
+
+    def _build_ui(self):
+        tb = tk.Frame(self, bg=TB_BG, height=40)
+        tb.pack(fill=tk.X)
+        tb.pack_propagate(False)
+        toolbar_btn(tb, "＋  Neu",        self._add).pack(side=tk.LEFT, padx=(8,2), pady=5)
+        toolbar_btn(tb, "✎  Bearbeiten",  self._edit).pack(side=tk.LEFT, padx=2, pady=5)
+        toolbar_btn(tb, "✕  Löschen",     self._delete).pack(side=tk.LEFT, padx=2, pady=5)
+        tk.Frame(tb, bg="#3a6a94", width=1).pack(side=tk.LEFT, fill=tk.Y, pady=6, padx=8)
+        toolbar_btn(tb, "PDF exportieren", self._export_pdf).pack(side=tk.LEFT, padx=2, pady=5)
+
+        sf = ttk.Frame(self, padding=(8,5,8,0))
+        sf.pack(fill=tk.X)
+        ttk.Label(sf, text="Suche:").pack(side=tk.LEFT)
+        self._search = tk.StringVar()
+        self._search.trace_add("write", lambda *_: self._filter())
+        ttk.Entry(sf, textvariable=self._search, width=28).pack(side=tk.LEFT, padx=6)
+        ttk.Button(sf, text="✕", width=3, command=lambda: self._search.set("")).pack(side=tk.LEFT)
+
+        tf = ttk.Frame(self, padding=(8,4,8,0))
+        tf.pack(fill=tk.BOTH, expand=True)
+        self._tree = ttk.Treeview(tf, columns=self.COLUMNS, show="headings", selectmode="browse")
+        for c in self.COLUMNS:
+            self._tree.heading(c, text=self.COL_LABELS[c], command=lambda x=c: self._sort(x))
+            self._tree.column(c, width=self.COL_WIDTHS[c], minwidth=50)
+        vsb = ttk.Scrollbar(tf, orient="vertical", command=self._tree.yview)
+        self._tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._tree.pack(fill=tk.BOTH, expand=True)
+        self._tree.bind("<Double-1>", lambda _: self._edit())
+        self._tree.bind("<Delete>",   lambda _: self._delete())
+
+        self._status = tk.StringVar()
+        ttk.Label(self, textvariable=self._status, anchor="w",
+                  padding=(10,3)).pack(fill=tk.X, side=tk.BOTTOM)
+
+    def load(self):
+        self._rows = get_all_contracts()
+        self._filter()
+
+    def _filter(self):
+        q = self._search.get().lower()
+        shown = self._rows if not q else [r for r in self._rows if any(q in str(v).lower() for v in r[1:])]
+        self._tree.delete(*self._tree.get_children())
+        for r in shown:
+            _, cat, name, prov, cnum, _, _, _, amt, intv, sd, ed, np_, _ = r
+            self._tree.insert("", "end", iid=str(r[0]),
+                               values=(cat, name, prov, cnum,
+                                       format_amount(amt), intv, sd, ed, np_))
+        n, tot = len(shown), len(self._rows)
+        self._status.set(f"{n} Einträge" + (f"  (von {tot})" if n != tot else ""))
+
+    def _sort(self, col):
+        self._sort_asc = not self._sort_asc if self._sort_col == col else True
+        self._sort_col = col
+        idx = self.DB_IDX[col]
+        self._rows.sort(key=lambda r: (r[idx] is None, r[idx] or ""), reverse=not self._sort_asc)
+        self._filter()
+
+    def _sel_id(self):
+        s = self._tree.selection()
+        return int(s[0]) if s else None
+
+    def _row(self, rid):
+        return next((r for r in self._rows if r[0] == rid), None)
+
+    def _add(self):
+        dlg = ContractDialog(self.winfo_toplevel(), "Neuen Vertrag / Versicherung anlegen")
+        self.wait_window(dlg)
+        if dlg.result:
+            d = dlg.result
+            insert_contract(d["category"], d["name"], d["provider"], d["contract_number"],
+                            d["login_url"], d["username"], d["password"], d["amount"],
+                            d["interval"], d["start_date"], d["end_date"],
+                            d["notice_period"], d["notes"])
+            self.load()
+
+    def _edit(self):
+        rid = self._sel_id()
+        if rid is None:
+            messagebox.showinfo("Hinweis", "Bitte einen Eintrag auswählen.")
+            return
+        r = self._row(rid)
+        _, cat, name, prov, cnum, lu, un, pw_enc, amt, intv, sd, ed, np_, notes = r
+        dlg = ContractDialog(self.winfo_toplevel(), f"Bearbeiten – {name}", {
+            "category": cat or "", "name": name or "", "provider": prov or "",
+            "contract_number": cnum or "", "login_url": lu or "",
+            "username": un or "", "password": decrypt(pw_enc) if pw_enc else "",
+            "amount": format_amount(amt), "interval": intv or "",
+            "start_date": sd or "", "end_date": ed or "",
+            "notice_period": np_ or "", "notes": notes or "",
+        })
+        self.wait_window(dlg)
+        if dlg.result:
+            d = dlg.result
+            update_contract(rid, d["category"], d["name"], d["provider"],
+                            d["contract_number"], d["login_url"], d["username"],
+                            d["password"], d["amount"], d["interval"],
+                            d["start_date"], d["end_date"], d["notice_period"], d["notes"])
+            self.load()
+
+    def _delete(self):
+        rid = self._sel_id()
+        if rid is None:
+            messagebox.showinfo("Hinweis", "Bitte einen Eintrag auswählen.")
+            return
+        r = self._row(rid)
+        if messagebox.askyesno("Löschen", f'Eintrag „{r[2]}" wirklich löschen?', icon="warning"):
+            delete_contract(rid)
+            self.load()
+
+    def _export_pdf(self):
+        if not self._rows:
+            messagebox.showinfo("Keine Daten", "Keine Verträge vorhanden.")
+            return
+        show_pw = messagebox.askyesno("PDF-Export",
+            "Passwörter im Klartext exportieren?", icon="warning")
+        fp = filedialog.asksaveasfilename(
+            defaultextension=".pdf", filetypes=[("PDF", "*.pdf")],
+            initialfile=f"Vertraege_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            title="PDF speichern …")
+        if not fp:
+            return
+        try:
+            export_contracts_pdf(fp, self._rows, show_pw)
+            if messagebox.askyesno("Gespeichert", f"PDF gespeichert:\n{fp}\n\nJetzt öffnen?"):
+                os.startfile(fp)
+        except Exception as e:
+            messagebox.showerror("Fehler", str(e))
+
+
+# ---------------------------------------------------------------------------
+# Hauptfenster
+# ---------------------------------------------------------------------------
+class BankManagerApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Bank Account Manager")
+        self.geometry("1020x580")
+        self.minsize(800, 440)
+        self._configure_style()
+        self._build_ui()
+
+    def _configure_style(self):
+        style = ttk.Style(self)
+        for theme in ("vista", "clam", "default"):
+            try:
+                style.theme_use(theme)
+                break
+            except tk.TclError:
+                continue
+        style.configure("TNotebook.Tab", padding=(16, 6), font=("Segoe UI", 10))
+
+    def _build_ui(self):
+        nb = ttk.Notebook(self)
+        nb.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+
+        self._accounts_tab  = AccountsTab(nb)
+        self._contracts_tab = ContractsTab(nb)
+
+        nb.add(self._accounts_tab,  text="  Bankkonten  ")
+        nb.add(self._contracts_tab, text="  Verträge & Versicherungen  ")
+
+
+# ---------------------------------------------------------------------------
+# Einstiegspunkt
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     init_db()
     app = BankManagerApp()
