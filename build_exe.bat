@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 echo ============================================================
@@ -7,21 +7,44 @@ echo  Bank Account Manager - EXE erstellen
 echo ============================================================
 echo.
 
-:: Python pruefen
-python --version
-if errorlevel 1 (
-    echo.
-    echo FEHLER: Python nicht gefunden. Bitte zuerst install_and_run.bat ausfuehren.
-    pause
-    exit /b 1
+:: --- Python suchen (gleiche Logik wie install_and_run.bat) ---
+set PYTHON=
+
+where py >nul 2>&1
+if not errorlevel 1 ( set PYTHON=py & goto :found_python )
+
+where python >nul 2>&1
+if not errorlevel 1 (
+    python --version >nul 2>&1
+    if not errorlevel 1 ( set PYTHON=python & goto :found_python )
 )
 
-:: Abhaengigkeiten + PyInstaller installieren
+for %%V in (313 312 311 310 39 38) do (
+    for %%P in (
+        "%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe"
+        "%ProgramFiles%\Python%%V\python.exe"
+        "%ProgramFiles(x86)%\Python%%V\python.exe"
+        "C:\Python%%V\python.exe"
+    ) do (
+        if exist %%P ( set PYTHON=%%P & goto :found_python )
+    )
+)
+
+echo FEHLER: Python nicht gefunden. Bitte zuerst install_and_run.bat ausfuehren.
+pause
+exit /b 1
+
+:found_python
+echo Python gefunden: !PYTHON!
+!PYTHON! --version
 echo.
+
+:: --- Abhaengigkeiten + PyInstaller ---
 echo Installiere Abhaengigkeiten und PyInstaller...
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-python -m pip install pyinstaller
+echo.
+!PYTHON! -m pip install --upgrade pip
+!PYTHON! -m pip install -r "%~dp0requirements.txt"
+!PYTHON! -m pip install pyinstaller
 if errorlevel 1 (
     echo.
     echo FEHLER: Installation fehlgeschlagen.
@@ -29,11 +52,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: EXE bauen
+:: --- EXE bauen ---
 echo.
 echo Erstelle EXE (kann einige Minuten dauern)...
 echo.
-python -m PyInstaller bank_manager.spec --clean
+!PYTHON! -m PyInstaller "%~dp0bank_manager.spec" --clean
 if errorlevel 1 (
     echo.
     echo FEHLER: EXE konnte nicht erstellt werden.
@@ -43,8 +66,8 @@ if errorlevel 1 (
 
 echo.
 echo ============================================================
-echo  Fertig! Die EXE liegt unter:
-echo  %~dp0dist\BankAccountManager.exe
+echo  Fertig!
+echo  Die EXE liegt unter: %~dp0dist\BankAccountManager.exe
 echo ============================================================
 echo.
 pause
