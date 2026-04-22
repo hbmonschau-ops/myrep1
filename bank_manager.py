@@ -7,7 +7,11 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import sqlite3
 import os
+import shutil
+import subprocess
+import sys
 import base64
+from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
 from cryptography.fernet import Fernet
@@ -24,8 +28,10 @@ from reportlab.lib.enums import TA_CENTER
 # ---------------------------------------------------------------------------
 # Datenbankpfad & Verschlüsselung
 # ---------------------------------------------------------------------------
-APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "BankAccountManager"
+APP_DIR  = Path(os.getenv("APPDATA", Path.home())) / "BankAccountManager"
+DOCS_DIR = APP_DIR / "documents"
 APP_DIR.mkdir(parents=True, exist_ok=True)
+DOCS_DIR.mkdir(exist_ok=True)
 DB_PATH  = APP_DIR / "bankaccounts.db"
 KEY_FILE = APP_DIR / "key.bin"
 
@@ -103,6 +109,20 @@ def init_db():
         )
     """)
 
+    # --- Dokumente ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS documents (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type   TEXT NOT NULL,
+            entity_id     INTEGER NOT NULL,
+            original_name TEXT NOT NULL,
+            stored_name   TEXT NOT NULL,
+            file_size     INTEGER,
+            description   TEXT,
+            created_at    TEXT DEFAULT (datetime('now','localtime'))
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -147,6 +167,7 @@ def update_account(aid, bank_name, account_number, login_url, username,
 
 
 def delete_account(aid):
+    delete_entity_documents("account", aid)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM accounts WHERE id=?", (aid,))
     conn.commit()
@@ -198,8 +219,67 @@ def update_contract(cid, category, name, provider, contract_number, login_url,
 
 
 def delete_contract(cid):
+    delete_entity_documents("contract", cid)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM contracts WHERE id=?", (cid,))
+    conn.commit()
+    conn.close()
+
+
+# --- Dokumente CRUD ---
+def get_documents(entity_type: str, entity_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT id, original_name, stored_name, file_size, description, created_at "
+        "FROM documents WHERE entity_type=? AND entity_id=? ORDER BY created_at",
+        (entity_type, entity_id)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def add_document(entity_type: str, entity_id: int, src_path: str, description: str = "") -> bool:
+    src = Path(src_path)
+    if not src.exists():
+        return False
+    stored_name = f"{uuid4().hex}{src.suffix.lower()}"
+    dest = DOCS_DIR / stored_name
+    shutil.copy2(src, dest)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO documents (entity_type,entity_id,original_name,stored_name,file_size,description) "
+        "VALUES (?,?,?,?,?,?)",
+        (entity_type, entity_id, src.name, stored_name, dest.stat().st_size, description)
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_document(doc_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT stored_name FROM documents WHERE id=?", (doc_id,)).fetchone()
+    if row:
+        f = DOCS_DIR / row[0]
+        if f.exists():
+            f.unlink()
+        conn.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_entity_documents(entity_type: str, entity_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT stored_name FROM documents WHERE entity_type=? AND entity_id=?",
+        (entity_type, entity_id)
+    ).fetchall()
+    for (sn,) in rows:
+        f = DOCS_DIR / sn
+        if f.exists():
+            f.unlink()
+    conn.execute("DELETE FROM documents WHERE entity_type=? AND entity_id=?",
+                 (entity_type, entity_id))
     conn.commit()
     conn.close()
 
@@ -224,6 +304,28 @@ def parse_amount(text: str):
         return float(text)
     except ValueError:
         return None
+
+
+def format_size(size) -> str:
+    if size is None:
+        return ""
+    if size < 1024:
+        return f"{size} B"
+    if size < 1_048_576:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / 1_048_576:.1f} MB"
+
+
+def open_file(path: Path):
+    if not path.exists():
+        messagebox.showerror("Fehler", f"Datei nicht gefunden:\n{path}")
+        return
+    if sys.platform == "win32":
+        os.startfile(path)
+    elif sys.platform == "darwin":
+        subprocess.run(["open", str(path)])
+    else:
+        subprocess.run(["xdg-open", str(path)])
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +587,179 @@ class ContractDialog(BaseDialog):
 
 
 # ---------------------------------------------------------------------------
+# Dialog: optionale Beschreibung beim Datei-Upload
+# ---------------------------------------------------------------------------
+class _DescriptionDialog(tk.Toplevel):
+    def __init__(self, parent, filename: str):
+        super().__init__(parent)
+        self.title("Beschreibung")
+        self.resizable(False, False)
+        self.grab_set()
+        self.result = ""
+        ttk.Label(self, text=f"Beschreibung (optional):\n{filename}",
+                  padding=(12, 8, 12, 4), justify="left").pack()
+        self._var = tk.StringVar()
+        e = ttk.Entry(self, textvariable=self._var, width=36)
+        e.pack(padx=12, pady=4)
+        e.focus()
+        e.bind("<Return>", lambda _: self._ok())
+        btn = ttk.Frame(self, padding=(12, 6))
+        btn.pack()
+        ttk.Button(btn, text="OK",           command=self._ok,     width=10).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn, text="Überspringen", command=self.destroy, width=12).pack(side=tk.LEFT, padx=4)
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width()  - self.winfo_width())  // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+
+    def _ok(self):
+        self.result = self._var.get().strip()
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
+# DocumentsPanel
+# ---------------------------------------------------------------------------
+class DocumentsPanel(ttk.LabelFrame):
+    def __init__(self, parent, entity_type: str):
+        super().__init__(parent, text=" Dokumente ", padding=(6, 4))
+        self._entity_type = entity_type
+        self._entity_id   = None
+        self._docs: list  = []
+        self._build_ui()
+
+    def _build_ui(self):
+        tb = tk.Frame(self, bg="#f0f4f8")
+        tb.pack(fill=tk.X, pady=(0, 4))
+        mkbtn = lambda text, cmd: tk.Button(
+            tb, text=text, command=cmd,
+            bg="#f0f4f8", fg="#1a3c5e", activebackground="#d0dce8",
+            font=("Segoe UI", 9, "bold"), relief="flat", padx=8, pady=3, cursor="hand2")
+        self._btn_add  = mkbtn("＋ Hinzufügen",   self._add)
+        self._btn_open = mkbtn("↗ Öffnen",        self._open)
+        self._btn_save = mkbtn("⬇ Speichern als", self._save_as)
+        self._btn_del  = mkbtn("✕ Entfernen",     self._remove)
+        for b in (self._btn_add, self._btn_open, self._btn_save, self._btn_del):
+            b.pack(side=tk.LEFT, padx=(0, 3))
+        self._lbl = tk.Label(tb, text="(kein Eintrag ausgewählt)",
+                             fg="#888", font=("Segoe UI", 8, "italic"), bg="#f0f4f8")
+        self._lbl.pack(side=tk.LEFT, padx=10)
+
+        cols = ("original_name", "description", "file_size", "created_at")
+        self._tree = ttk.Treeview(self, columns=cols, show="headings",
+                                  selectmode="browse", height=4)
+        self._tree.heading("original_name", text="Dateiname")
+        self._tree.heading("description",   text="Beschreibung")
+        self._tree.heading("file_size",     text="Größe")
+        self._tree.heading("created_at",    text="Hinzugefügt")
+        self._tree.column("original_name", width=220, minwidth=120)
+        self._tree.column("description",   width=200, minwidth=80)
+        self._tree.column("file_size",     width=70,  minwidth=50, anchor="e")
+        self._tree.column("created_at",    width=130, minwidth=100)
+        vsb = ttk.Scrollbar(self, orient="vertical", command=self._tree.yview)
+        self._tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._tree.pack(fill=tk.BOTH, expand=True)
+        self._tree.bind("<Double-1>", lambda _: self._open())
+        self._set_state("disabled")
+
+    def set_entity(self, entity_id, label: str = ""):
+        self._entity_id = entity_id
+        if entity_id is None:
+            self._lbl.config(text="(kein Eintrag ausgewählt)")
+            self._set_state("disabled")
+            self._tree.delete(*self._tree.get_children())
+            return
+        self._lbl.config(text=f"→  {label}")
+        self._set_state("normal")
+        self._refresh()
+
+    def _refresh(self):
+        self._tree.delete(*self._tree.get_children())
+        if self._entity_id is None:
+            return
+        self._docs = get_documents(self._entity_type, self._entity_id)
+        for d in self._docs:
+            did, orig, stored, fsize, desc, created = d
+            self._tree.insert("", "end", iid=str(did),
+                              values=(orig, desc or "", format_size(fsize), created))
+
+    def _set_state(self, state: str):
+        for b in (self._btn_add, self._btn_open, self._btn_save, self._btn_del):
+            b.config(state=state)
+
+    def _sel_id(self):
+        s = self._tree.selection()
+        return int(s[0]) if s else None
+
+    def _doc_row(self, doc_id):
+        return next((d for d in self._docs if d[0] == doc_id), None)
+
+    def _add(self):
+        if self._entity_id is None:
+            return
+        paths = filedialog.askopenfilenames(
+            title="Dokument(e) hinzufügen",
+            filetypes=[
+                ("Alle Dateien", "*.*"),
+                ("PDF",          "*.pdf"),
+                ("Bilder",       "*.png *.jpg *.jpeg *.tif *.tiff"),
+                ("Word",         "*.docx *.doc"),
+                ("Excel",        "*.xlsx *.xls"),
+            ]
+        )
+        if not paths:
+            return
+        desc = ""
+        if len(paths) == 1:
+            dlg = _DescriptionDialog(self.winfo_toplevel(), Path(paths[0]).name)
+            self.wait_window(dlg)
+            desc = dlg.result or ""
+        for p in paths:
+            add_document(self._entity_type, self._entity_id, p, desc)
+        self._refresh()
+
+    def _open(self):
+        did = self._sel_id()
+        if did is None:
+            messagebox.showinfo("Hinweis", "Bitte eine Datei auswählen.")
+            return
+        row = self._doc_row(did)
+        if row:
+            open_file(DOCS_DIR / row[2])
+
+    def _save_as(self):
+        did = self._sel_id()
+        if did is None:
+            messagebox.showinfo("Hinweis", "Bitte eine Datei auswählen.")
+            return
+        row = self._doc_row(did)
+        if not row:
+            return
+        dest = filedialog.asksaveasfilename(
+            title="Datei exportieren",
+            defaultextension=Path(row[1]).suffix,
+            initialfile=row[1],
+            filetypes=[("Alle Dateien", "*.*")]
+        )
+        if dest:
+            shutil.copy2(DOCS_DIR / row[2], dest)
+            messagebox.showinfo("Gespeichert", f"Datei gespeichert:\n{dest}")
+
+    def _remove(self):
+        did = self._sel_id()
+        if did is None:
+            messagebox.showinfo("Hinweis", "Bitte eine Datei auswählen.")
+            return
+        row = self._doc_row(did)
+        if row and messagebox.askyesno("Entfernen",
+                f'Dokument „{row[1]}" wirklich entfernen?\nDie Datei wird dauerhaft gelöscht.',
+                icon="warning"):
+            delete_document(did)
+            self._refresh()
+
+
+# ---------------------------------------------------------------------------
 # Gemeinsame Farben
 # ---------------------------------------------------------------------------
 TB_BG      = "#1a3c5e"
@@ -540,9 +815,15 @@ class AccountsTab(ttk.Frame):
         ttk.Entry(sf, textvariable=self._search, width=28).pack(side=tk.LEFT, padx=6)
         ttk.Button(sf, text="✕", width=3, command=lambda: self._search.set("")).pack(side=tk.LEFT)
 
-        # Tabelle
-        tf = ttk.Frame(self, padding=(8,4,8,0))
-        tf.pack(fill=tk.BOTH, expand=True)
+        self._status = tk.StringVar()
+        ttk.Label(self, textvariable=self._status, anchor="w",
+                  padding=(10, 3)).pack(fill=tk.X, side=tk.BOTTOM)
+
+        # PanedWindow: Eintrags-Tabelle oben, Dokumente unten
+        pw = ttk.PanedWindow(self, orient=tk.VERTICAL)
+        pw.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 0))
+
+        tf = ttk.Frame(pw)
         self._tree = ttk.Treeview(tf, columns=self.COLUMNS, show="headings", selectmode="browse")
         for c in self.COLUMNS:
             self._tree.heading(c, text=self.COL_LABELS[c], command=lambda x=c: self._sort(x))
@@ -551,12 +832,13 @@ class AccountsTab(ttk.Frame):
         self._tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self._tree.pack(fill=tk.BOTH, expand=True)
-        self._tree.bind("<Double-1>", lambda _: self._edit())
-        self._tree.bind("<Delete>",   lambda _: self._delete())
+        self._tree.bind("<Double-1>",         lambda _: self._edit())
+        self._tree.bind("<Delete>",           lambda _: self._delete())
+        self._tree.bind("<<TreeviewSelect>>", self._on_select)
+        pw.add(tf, weight=3)
 
-        self._status = tk.StringVar()
-        ttk.Label(self, textvariable=self._status, anchor="w",
-                  padding=(10,3)).pack(fill=tk.X, side=tk.BOTTOM)
+        self._docs_panel = DocumentsPanel(pw, entity_type="account")
+        pw.add(self._docs_panel, weight=1)
 
     def load(self):
         self._rows = get_all_accounts()
@@ -572,6 +854,15 @@ class AccountsTab(ttk.Frame):
                                values=(bn, an, lu, un, format_amount(bal), bd))
         n, tot = len(shown), len(self._rows)
         self._status.set(f"{n} Einträge" + (f"  (von {tot})" if n != tot else ""))
+        self._docs_panel.set_entity(None)
+
+    def _on_select(self, _event):
+        rid = self._sel_id()
+        if rid is None:
+            self._docs_panel.set_entity(None)
+            return
+        r = self._row(rid)
+        self._docs_panel.set_entity(rid, r[1] if r else "")
 
     def _sort(self, col):
         self._sort_asc = not self._sort_asc if self._sort_col == col else True
@@ -687,8 +978,14 @@ class ContractsTab(ttk.Frame):
         ttk.Entry(sf, textvariable=self._search, width=28).pack(side=tk.LEFT, padx=6)
         ttk.Button(sf, text="✕", width=3, command=lambda: self._search.set("")).pack(side=tk.LEFT)
 
-        tf = ttk.Frame(self, padding=(8,4,8,0))
-        tf.pack(fill=tk.BOTH, expand=True)
+        self._status = tk.StringVar()
+        ttk.Label(self, textvariable=self._status, anchor="w",
+                  padding=(10, 3)).pack(fill=tk.X, side=tk.BOTTOM)
+
+        pw = ttk.PanedWindow(self, orient=tk.VERTICAL)
+        pw.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 0))
+
+        tf = ttk.Frame(pw)
         self._tree = ttk.Treeview(tf, columns=self.COLUMNS, show="headings", selectmode="browse")
         for c in self.COLUMNS:
             self._tree.heading(c, text=self.COL_LABELS[c], command=lambda x=c: self._sort(x))
@@ -697,12 +994,13 @@ class ContractsTab(ttk.Frame):
         self._tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self._tree.pack(fill=tk.BOTH, expand=True)
-        self._tree.bind("<Double-1>", lambda _: self._edit())
-        self._tree.bind("<Delete>",   lambda _: self._delete())
+        self._tree.bind("<Double-1>",         lambda _: self._edit())
+        self._tree.bind("<Delete>",           lambda _: self._delete())
+        self._tree.bind("<<TreeviewSelect>>", self._on_select)
+        pw.add(tf, weight=3)
 
-        self._status = tk.StringVar()
-        ttk.Label(self, textvariable=self._status, anchor="w",
-                  padding=(10,3)).pack(fill=tk.X, side=tk.BOTTOM)
+        self._docs_panel = DocumentsPanel(pw, entity_type="contract")
+        pw.add(self._docs_panel, weight=1)
 
     def load(self):
         self._rows = get_all_contracts()
@@ -719,6 +1017,15 @@ class ContractsTab(ttk.Frame):
                                        format_amount(amt), intv, sd, ed, np_))
         n, tot = len(shown), len(self._rows)
         self._status.set(f"{n} Einträge" + (f"  (von {tot})" if n != tot else ""))
+        self._docs_panel.set_entity(None)
+
+    def _on_select(self, _event):
+        rid = self._sel_id()
+        if rid is None:
+            self._docs_panel.set_entity(None)
+            return
+        r = self._row(rid)
+        self._docs_panel.set_entity(rid, r[2] if r else "")
 
     def _sort(self, col):
         self._sort_asc = not self._sort_asc if self._sort_col == col else True
@@ -806,8 +1113,8 @@ class BankManagerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Bank Account Manager")
-        self.geometry("1020x580")
-        self.minsize(800, 440)
+        self.geometry("1100x720")
+        self.minsize(860, 520)
         self._configure_style()
         self._build_ui()
 
