@@ -123,6 +123,37 @@ def init_db():
         )
     """)
 
+    # --- Tags-Verwaltung ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tags (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            name  TEXT NOT NULL UNIQUE,
+            color TEXT DEFAULT '#1a3c5e'
+        )
+    """)
+
+    # --- Verknüpfung Account ↔ Tags ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS account_tags (
+            account_id  INTEGER NOT NULL,
+            tag_id      INTEGER NOT NULL,
+            PRIMARY KEY (account_id, tag_id),
+            FOREIGN KEY (account_id) REFERENCES accounts(id),
+            FOREIGN KEY (tag_id) REFERENCES tags(id)
+        )
+    """)
+
+    # --- Verknüpfung Contract ↔ Tags ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS contract_tags (
+            contract_id INTEGER NOT NULL,
+            tag_id      INTEGER NOT NULL,
+            PRIMARY KEY (contract_id, tag_id),
+            FOREIGN KEY (contract_id) REFERENCES contracts(id),
+            FOREIGN KEY (tag_id) REFERENCES tags(id)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -280,6 +311,60 @@ def delete_entity_documents(entity_type: str, entity_id: int):
             f.unlink()
     conn.execute("DELETE FROM documents WHERE entity_type=? AND entity_id=?",
                  (entity_type, entity_id))
+    conn.commit()
+    conn.close()
+
+
+# --- Tags CRUD ---
+def get_all_tags():
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT id, name, color FROM tags ORDER BY name").fetchall()
+    conn.close()
+    return rows
+
+def insert_tag(name: str, color: str = "#1a3c5e") -> int:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute("INSERT INTO tags (name, color) VALUES (?,?)", (name, color))
+    conn.commit()
+    new_id = cur.lastrowid
+    conn.close()
+    return new_id
+
+def update_tag(tag_id: int, name: str, color: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE tags SET name=?, color=? WHERE id=?", (name, color, tag_id))
+    conn.commit()
+    conn.close()
+
+def delete_tag(tag_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM account_tags WHERE tag_id=?", (tag_id,))
+    conn.execute("DELETE FROM contract_tags WHERE tag_id=?", (tag_id,))
+    conn.execute("DELETE FROM tags WHERE id=?", (tag_id,))
+    conn.commit()
+    conn.close()
+
+def get_entry_tags(entity_type: str, entity_id: int) -> list:
+    table = "account_tags" if entity_type == "account" else "contract_tags"
+    id_col = "account_id" if entity_type == "account" else "contract_id"
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        f"SELECT t.id, t.name, t.color FROM tags t "
+        f"JOIN {table} et ON t.id = et.tag_id "
+        f"WHERE et.{id_col}=? ORDER BY t.name",
+        (entity_id,)
+    ).fetchall()
+    conn.close()
+    return rows
+
+def set_entry_tags(entity_type: str, entity_id: int, tag_ids: list):
+    table = "account_tags" if entity_type == "account" else "contract_tags"
+    id_col = "account_id" if entity_type == "account" else "contract_id"
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(f"DELETE FROM {table} WHERE {id_col}=?", (entity_id,))
+    for tid in tag_ids:
+        conn.execute(f"INSERT OR IGNORE INTO {table} ({id_col}, tag_id) VALUES (?,?)",
+                     (entity_id, tid))
     conn.commit()
     conn.close()
 
@@ -1106,6 +1191,126 @@ class ContractsTab(ttk.Frame):
             messagebox.showerror("Fehler", str(e))
 
 
+class _TagDialog(BaseDialog):
+    def __init__(self, parent, title: str, data: dict = None):
+        super().__init__(parent, title)
+        self._data = data or {}
+        self._vars = {}
+        self._build_ui()
+        self._center(parent)
+
+    def _build_ui(self):
+        frame = ttk.Frame(self, padding=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text="Tag-Name *", width=16, anchor="w").grid(
+            row=0, column=0, sticky="w", padx=10, pady=6)
+        self._vars["name"] = tk.StringVar(value=self._data.get("name", ""))
+        e = ttk.Entry(frame, textvariable=self._vars["name"], width=28)
+        e.grid(row=0, column=1, sticky="ew", padx=10, pady=6)
+        e.focus()
+        btn = ttk.Frame(frame)
+        btn.grid(row=1, column=0, columnspan=2, pady=(12, 0))
+        ttk.Button(btn, text="Speichern", command=self._save,   width=12).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn, text="Abbrechen", command=self.destroy, width=12).pack(side=tk.LEFT, padx=6)
+        e.bind("<Return>", lambda _: self._save())
+
+    def _save(self):
+        name = self._vars["name"].get().strip()
+        if not name:
+            messagebox.showwarning("Pflichtfeld", "Bitte Tag-Namen eingeben.", parent=self)
+            return
+        self.result = {"name": name, "color": self._data.get("color", "#1a3c5e")}
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Tab: Einstellungen
+# ---------------------------------------------------------------------------
+class SettingsTab(ttk.Frame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._tags: list = []
+        self._build_ui()
+        self.load()
+
+    def _build_ui(self):
+        tb = tk.Frame(self, bg=TB_BG, height=40)
+        tb.pack(fill=tk.X)
+        tb.pack_propagate(False)
+        toolbar_btn(tb, "＋  Neu",       self._add).pack(side=tk.LEFT, padx=(8,2), pady=5)
+        toolbar_btn(tb, "✎  Bearbeiten", self._edit).pack(side=tk.LEFT, padx=2, pady=5)
+        toolbar_btn(tb, "✕  Löschen",   self._delete).pack(side=tk.LEFT, padx=2, pady=5)
+
+        hdr = ttk.Frame(self, padding=(16, 12, 0, 4))
+        hdr.pack(fill=tk.X)
+        ttk.Label(hdr, text="Tag-Verwaltung", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
+
+        tf = ttk.Frame(self, padding=(16, 0, 16, 0))
+        tf.pack(fill=tk.BOTH, expand=True)
+        self._tree = ttk.Treeview(tf, columns=("name", "color"), show="headings",
+                                  selectmode="browse", height=20)
+        self._tree.heading("name",  text="Tag-Name")
+        self._tree.heading("color", text="Farbe")
+        self._tree.column("name",  width=250, minwidth=120)
+        self._tree.column("color", width=120, minwidth=80)
+        vsb = ttk.Scrollbar(tf, orient="vertical", command=self._tree.yview)
+        self._tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._tree.pack(fill=tk.BOTH, expand=True)
+        self._tree.bind("<Double-1>", lambda _: self._edit())
+        self._tree.bind("<Delete>",   lambda _: self._delete())
+
+        self._status = tk.StringVar()
+        ttk.Label(self, textvariable=self._status, anchor="w",
+                  padding=(16, 4)).pack(fill=tk.X, side=tk.BOTTOM)
+
+    def load(self):
+        self._tags = get_all_tags()
+        self._tree.delete(*self._tree.get_children())
+        for t in self._tags:
+            self._tree.insert("", "end", iid=str(t[0]), values=(t[1], t[2]))
+        self._status.set(f"{len(self._tags)} Tags")
+
+    def _sel_id(self):
+        s = self._tree.selection()
+        return int(s[0]) if s else None
+
+    def _tag_row(self, tid):
+        return next((t for t in self._tags if t[0] == tid), None)
+
+    def _add(self):
+        dlg = _TagDialog(self.winfo_toplevel(), "Neuen Tag anlegen")
+        self.wait_window(dlg)
+        if dlg.result:
+            insert_tag(dlg.result["name"], dlg.result["color"])
+            self.load()
+
+    def _edit(self):
+        tid = self._sel_id()
+        if tid is None:
+            messagebox.showinfo("Hinweis", "Bitte einen Tag auswählen.")
+            return
+        row = self._tag_row(tid)
+        dlg = _TagDialog(self.winfo_toplevel(), f"Tag bearbeiten – {row[1]}",
+                         {"name": row[1], "color": row[2]})
+        self.wait_window(dlg)
+        if dlg.result:
+            update_tag(tid, dlg.result["name"], dlg.result["color"])
+            self.load()
+
+    def _delete(self):
+        tid = self._sel_id()
+        if tid is None:
+            messagebox.showinfo("Hinweis", "Bitte einen Tag auswählen.")
+            return
+        row = self._tag_row(tid)
+        if messagebox.askyesno("Löschen",
+                f'Tag „{row[1]}" wirklich löschen?\n'
+                "Er wird von allen Einträgen entfernt.", icon="warning"):
+            delete_tag(tid)
+            self.load()
+
+
 # ---------------------------------------------------------------------------
 # Hauptfenster
 # ---------------------------------------------------------------------------
@@ -1137,6 +1342,8 @@ class BankManagerApp(tk.Tk):
 
         nb.add(self._accounts_tab,  text="  Bankkonten  ")
         nb.add(self._contracts_tab, text="  Verträge & Versicherungen  ")
+        self._settings_tab = SettingsTab(nb)
+        nb.add(self._settings_tab, text="  Einstellungen  ")
 
 
 # ---------------------------------------------------------------------------
