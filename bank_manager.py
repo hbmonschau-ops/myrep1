@@ -1634,6 +1634,18 @@ class BankManagerApp(tk.Tk):
         style.configure("TNotebook.Tab", padding=(16, 6), font=("Segoe UI", 10))
 
     def _build_ui(self):
+        topbar = tk.Frame(self, bg="#1a3c5e", height=28)
+        topbar.pack(fill=tk.X)
+        topbar.pack_propagate(False)
+        tk.Label(topbar, text=f"Profil: {CURRENT_PROFILE}",
+                 bg="#1a3c5e", fg="white",
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=10)
+        tk.Button(topbar, text="Profil wechseln",
+                  command=self._switch_profile,
+                  bg="#2a5c8e", fg="white", relief="flat",
+                  font=("Segoe UI", 8), padx=8, cursor="hand2"
+                  ).pack(side=tk.RIGHT, padx=8, pady=3)
+
         nb = ttk.Notebook(self)
         nb.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
@@ -1645,11 +1657,38 @@ class BankManagerApp(tk.Tk):
         self._settings_tab = SettingsTab(nb)
         nb.add(self._settings_tab, text="  Einstellungen  ")
 
+    def _switch_profile(self):
+        self.destroy()
+        import subprocess
+        subprocess.Popen([sys.executable] + sys.argv)
+        sys.exit(0)
+
 
 # ---------------------------------------------------------------------------
 # Einstiegspunkt
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    init_db()
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    PROFILES_DIR.mkdir(exist_ok=True)
+
+    root = tk.Tk()
+    root.withdraw()
+
+    # Beim ersten Start: Standard-Profil anlegen
+    if not get_profiles():
+        name = simpledialog.askstring(
+            "Willkommen", "Erstes Profil anlegen – bitte Namen eingeben:",
+            parent=root) or "Standard"
+        create_profile(name.strip() or "Standard")
+
+    dlg = ProfileSelectionDialog(root)
+    root.wait_window(dlg)
+    root.destroy()
+
+    if not dlg.selected_profile:
+        sys.exit(0)
+
+    activate_profile(dlg.selected_profile)
+
     app = BankManagerApp()
     app.mainloop()
