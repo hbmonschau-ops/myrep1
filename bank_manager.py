@@ -3,8 +3,9 @@ Bank Account Manager - Windows Desktop Application
 Verwaltung von Bankzugängen, Verträgen und Versicherungen mit PDF-Export
 """
 
+import json
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 import sqlite3
 import os
 import shutil
@@ -28,12 +29,18 @@ from reportlab.lib.enums import TA_CENTER
 # ---------------------------------------------------------------------------
 # Datenbankpfad & Verschlüsselung
 # ---------------------------------------------------------------------------
-APP_DIR  = Path(os.getenv("APPDATA", Path.home())) / "BankAccountManager"
-DOCS_DIR = APP_DIR / "documents"
+APP_DIR       = Path(os.getenv("APPDATA", Path.home())) / "BankAccountManager"
+PROFILES_DIR  = APP_DIR / "profiles"
+PROFILES_FILE = APP_DIR / "profiles.json"
 APP_DIR.mkdir(parents=True, exist_ok=True)
-DOCS_DIR.mkdir(exist_ok=True)
-DB_PATH  = APP_DIR / "bankaccounts.db"
-KEY_FILE = APP_DIR / "key.bin"
+PROFILES_DIR.mkdir(exist_ok=True)
+
+# Werden durch activate_profile() gesetzt:
+DB_PATH         = None
+DOCS_DIR        = None
+KEY_FILE        = None
+FERNET          = None
+CURRENT_PROFILE = None
 
 
 def _get_or_create_key() -> bytes:
@@ -47,9 +54,6 @@ def _get_or_create_key() -> bytes:
     return salt + key
 
 
-FERNET = Fernet(_get_or_create_key()[16:])
-
-
 def encrypt(plaintext: str) -> str:
     return FERNET.encrypt(plaintext.encode()).decode()
 
@@ -59,6 +63,74 @@ def decrypt(token: str) -> str:
         return FERNET.decrypt(token.encode()).decode()
     except Exception:
         return "*** Fehler ***"
+
+
+# ---------------------------------------------------------------------------
+# Profil-Verwaltung
+# ---------------------------------------------------------------------------
+def get_profiles() -> list:
+    if not PROFILES_FILE.exists():
+        return []
+    try:
+        return json.loads(PROFILES_FILE.read_text(encoding="utf-8")).get("profiles", [])
+    except Exception:
+        return []
+
+
+def _save_profiles(profiles: list, last_profile: str = None):
+    data = {"profiles": profiles}
+    if last_profile:
+        data["last_profile"] = last_profile
+    PROFILES_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def create_profile(name: str):
+    profiles = get_profiles()
+    if any(p["name"] == name for p in profiles):
+        raise ValueError(f"Profil '{name}' existiert bereits.")
+    profiles.append({"name": name, "created_at": datetime.now().isoformat()})
+    pdir = PROFILES_DIR / name
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "documents").mkdir(exist_ok=True)
+    _save_profiles(profiles)
+
+
+def delete_profile(name: str):
+    profiles = [p for p in get_profiles() if p["name"] != name]
+    pdir = PROFILES_DIR / name
+    if pdir.exists():
+        shutil.rmtree(pdir)
+    _save_profiles(profiles)
+
+
+def rename_profile(old_name: str, new_name: str):
+    profiles = get_profiles()
+    for p in profiles:
+        if p["name"] == old_name:
+            p["name"] = new_name
+    old_dir = PROFILES_DIR / old_name
+    new_dir = PROFILES_DIR / new_name
+    if old_dir.exists():
+        old_dir.rename(new_dir)
+    _save_profiles(profiles)
+
+
+def activate_profile(name: str):
+    global DB_PATH, DOCS_DIR, KEY_FILE, FERNET, CURRENT_PROFILE
+    CURRENT_PROFILE = name
+    pdir = PROFILES_DIR / name
+    pdir.mkdir(parents=True, exist_ok=True)
+    DB_PATH  = pdir / "bankaccounts.db"
+    DOCS_DIR = pdir / "documents"
+    KEY_FILE = pdir / "key.bin"
+    DOCS_DIR.mkdir(exist_ok=True)
+    FERNET = Fernet(_get_or_create_key()[16:])
+    profiles = get_profiles()
+    for p in profiles:
+        if p["name"] == name:
+            p["last_used"] = datetime.now().isoformat()
+    _save_profiles(profiles, name)
+    init_db()
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +771,111 @@ class ContractDialog(BaseDialog):
             "tag_ids":        [tid for tid, var in self._tag_vars.items() if var.get()],
         }
         self.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Profil-Auswahl-Dialog
+# ---------------------------------------------------------------------------
+class ProfileSelectionDialog(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Bank Account Manager – Profil auswählen")
+        self.resizable(False, False)
+        self.grab_set()
+        self.selected_profile = None
+        self._profiles: list = []
+        self._build_ui()
+        self._load()
+        self.update_idletasks()
+        w, h = 400, 340
+        x = (self.winfo_screenwidth()  - w) // 2
+        y = (self.winfo_screenheight() - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _build_ui(self):
+        ttk.Label(self, text="Benutzerprofil auswählen",
+                  font=("Segoe UI", 12, "bold"), padding=(16, 12, 16, 4)).pack()
+        ttk.Label(self, text="Doppelklick oder 'Öffnen' zum Starten.",
+                  foreground="#666", padding=(16, 0, 16, 8)).pack()
+        lf = ttk.Frame(self, padding=(16, 0))
+        lf.pack(fill=tk.BOTH, expand=True)
+        self._lb = tk.Listbox(lf, font=("Segoe UI", 11), selectmode="single",
+                              height=8, relief="solid", bd=1)
+        self._lb.pack(fill=tk.BOTH, expand=True)
+        self._lb.bind("<Double-1>", lambda _: self._open())
+        btn = ttk.Frame(self, padding=(16, 10))
+        btn.pack(fill=tk.X)
+        ttk.Button(btn, text="Öffnen",     command=self._open,   width=11).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn, text="Neu",        command=self._new,    width=9).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn, text="Umbenennen", command=self._rename, width=11).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn, text="Löschen",    command=self._delete, width=9).pack(side=tk.LEFT, padx=2)
+
+    def _load(self):
+        self._lb.delete(0, tk.END)
+        self._profiles = get_profiles()
+        for p in self._profiles:
+            lu = p.get("last_used", "")
+            label = p["name"] + (f"  (zuletzt: {lu[:10]})" if lu else "")
+            self._lb.insert(tk.END, label)
+        if self._profiles:
+            self._lb.selection_set(0)
+
+    def _sel_idx(self):
+        s = self._lb.curselection()
+        return s[0] if s else None
+
+    def _sel_name(self):
+        idx = self._sel_idx()
+        return self._profiles[idx]["name"] if idx is not None else None
+
+    def _open(self):
+        name = self._sel_name()
+        if not name:
+            messagebox.showwarning("Hinweis", "Bitte ein Profil auswählen.", parent=self)
+            return
+        self.selected_profile = name
+        self.destroy()
+
+    def _new(self):
+        name = simpledialog.askstring("Neues Profil", "Profilname:", parent=self)
+        if not name or not name.strip():
+            return
+        try:
+            create_profile(name.strip())
+            self._load()
+        except ValueError as e:
+            messagebox.showerror("Fehler", str(e), parent=self)
+
+    def _rename(self):
+        old = self._sel_name()
+        if not old:
+            return
+        new = simpledialog.askstring("Umbenennen", f"Neuer Name für '{old}':",
+                                     initialvalue=old, parent=self)
+        if not new or not new.strip() or new.strip() == old:
+            return
+        rename_profile(old, new.strip())
+        self._load()
+
+    def _delete(self):
+        name = self._sel_name()
+        if not name:
+            return
+        if len(self._profiles) <= 1:
+            messagebox.showwarning("Hinweis", "Mindestens ein Profil muss vorhanden sein.",
+                                   parent=self)
+            return
+        if messagebox.askyesno("Löschen",
+                f"Profil '{name}' und alle zugehörigen Daten wirklich löschen?",
+                icon="warning", parent=self):
+            delete_profile(name)
+            self._load()
+
+    def _on_close(self):
+        if messagebox.askyesno("Beenden", "Anwendung beenden?", parent=self):
+            self.selected_profile = None
+            self.destroy()
 
 
 # ---------------------------------------------------------------------------
@@ -1440,7 +1617,7 @@ class SettingsTab(ttk.Frame):
 class BankManagerApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Bank Account Manager")
+        self.title(f"Bank Account Manager  –  Profil: {CURRENT_PROFILE}")
         self.geometry("1100x720")
         self.minsize(860, 520)
         self._configure_style()
