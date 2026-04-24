@@ -195,6 +195,11 @@ def init_db():
         )
     """)
 
+    try:
+        conn.execute("ALTER TABLE documents ADD COLUMN text_content TEXT")
+    except sqlite3.OperationalError:
+        pass
+
     # --- Tags-Verwaltung ---
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tags (
@@ -352,11 +357,12 @@ def add_document(entity_type: str, entity_id: int, src_path: str, description: s
     stored_name = f"{uuid4().hex}{src.suffix.lower()}"
     dest = DOCS_DIR / stored_name
     shutil.copy2(src, dest)
+    text_content = extract_text_from_file(dest)
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
-        "INSERT INTO documents (entity_type,entity_id,original_name,stored_name,file_size,description) "
-        "VALUES (?,?,?,?,?,?)",
-        (entity_type, entity_id, src.name, stored_name, dest.stat().st_size, description)
+        "INSERT INTO documents (entity_type,entity_id,original_name,stored_name,file_size,description,text_content) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (entity_type, entity_id, src.name, stored_name, dest.stat().st_size, description, text_content)
     )
     conn.commit()
     conn.close()
@@ -389,6 +395,20 @@ def delete_entity_documents(entity_type: str, entity_id: int):
                  (entity_type, entity_id))
     conn.commit()
     conn.close()
+
+
+def reindex_all_documents():
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT id, stored_name FROM documents").fetchall()
+    updated = 0
+    for did, stored_name in rows:
+        path = DOCS_DIR / stored_name
+        text = extract_text_from_file(path)
+        conn.execute("UPDATE documents SET text_content=? WHERE id=?", (text, did))
+        updated += 1
+    conn.commit()
+    conn.close()
+    return updated
 
 
 # --- Tags CRUD ---
@@ -487,6 +507,42 @@ def open_file(path: Path):
         subprocess.run(["open", str(path)])
     else:
         subprocess.run(["xdg-open", str(path)])
+
+
+def extract_text_from_file(path: Path) -> str:
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".pdf":
+            try:
+                import pdfplumber
+                with pdfplumber.open(path) as pdf:
+                    return "\n".join(p.extract_text() or "" for p in pdf.pages)
+            except ImportError:
+                pass
+        elif suffix == ".docx":
+            try:
+                from docx import Document as DocxDoc
+                return "\n".join(p.text for p in DocxDoc(path).paragraphs)
+            except ImportError:
+                pass
+        elif suffix in (".xlsx", ".xls"):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                parts = []
+                for ws in wb.worksheets:
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            if cell.value is not None:
+                                parts.append(str(cell.value))
+                return " ".join(parts)
+            except ImportError:
+                pass
+        elif suffix in (".txt", ".csv", ".md", ".json", ".xml", ".html", ".htm"):
+            return path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        pass
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -1612,6 +1668,125 @@ class SettingsTab(ttk.Frame):
 
 
 # ---------------------------------------------------------------------------
+# Tab: Volltextsuche
+# ---------------------------------------------------------------------------
+class SearchTab(ttk.Frame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._results: list = []
+        self._build_ui()
+
+    def _build_ui(self):
+        # Suchleiste
+        sf = ttk.Frame(self, padding=(12, 10))
+        sf.pack(fill=tk.X)
+        ttk.Label(sf, text="Volltextsuche:",
+                  font=("Segoe UI", 10, "bold")).pack(side=tk.LEFT)
+        self._query = tk.StringVar()
+        e = ttk.Entry(sf, textvariable=self._query, width=42, font=("Segoe UI", 10))
+        e.pack(side=tk.LEFT, padx=8)
+        e.bind("<Return>", lambda _: self._search())
+        ttk.Button(sf, text="Suchen",    command=self._search, width=10).pack(side=tk.LEFT)
+        ttk.Button(sf, text="✕", width=3,
+                   command=self._clear).pack(side=tk.LEFT, padx=4)
+        tk.Frame(sf, width=1, bg="#ccc").pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
+        ttk.Button(sf, text="Alle neu indizieren",
+                   command=self._reindex, width=18).pack(side=tk.LEFT)
+
+        self._info = tk.StringVar(value="Suchbegriff eingeben und Enter drücken.")
+        ttk.Label(self, textvariable=self._info, padding=(12, 2),
+                  foreground="#555").pack(anchor="w")
+
+        # Ergebnis-Treeview
+        tf = ttk.Frame(self, padding=(12, 0, 12, 0))
+        tf.pack(fill=tk.BOTH, expand=True)
+        cols = ("original_name", "entity_label", "rubrik", "description", "preview")
+        self._tree = ttk.Treeview(tf, columns=cols, show="headings",
+                                  selectmode="browse")
+        self._tree.heading("original_name", text="Dateiname")
+        self._tree.heading("entity_label",  text="Eintrag")
+        self._tree.heading("rubrik",         text="Rubrik")
+        self._tree.heading("description",   text="Beschreibung")
+        self._tree.heading("preview",       text="Fundstelle")
+        self._tree.column("original_name", width=180, minwidth=100, stretch=False)
+        self._tree.column("entity_label",  width=160, minwidth=80,  stretch=False)
+        self._tree.column("rubrik",         width=120, minwidth=60,  stretch=False)
+        self._tree.column("description",   width=140, minwidth=80,  stretch=False)
+        self._tree.column("preview",       width=420, minwidth=120, stretch=False)
+        vsb = ttk.Scrollbar(tf, orient="vertical",   command=self._tree.yview)
+        hsb = ttk.Scrollbar(tf, orient="horizontal", command=self._tree.xview)
+        self._tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.pack(side=tk.RIGHT,  fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self._tree.pack(fill=tk.BOTH, expand=True)
+        self._tree.bind("<Double-1>", self._open_doc)
+
+        self._status = tk.StringVar()
+        ttk.Label(self, textvariable=self._status, anchor="w",
+                  padding=(12, 4)).pack(fill=tk.X, side=tk.BOTTOM)
+
+    def _search(self):
+        q = self._query.get().strip()
+        if len(q) < 2:
+            messagebox.showinfo("Hinweis", "Bitte mindestens 2 Zeichen eingeben.", parent=self)
+            return
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT d.id, d.original_name, d.stored_name, d.entity_type, d.entity_id, "
+            "d.description, d.text_content FROM documents d "
+            "WHERE d.text_content LIKE ? COLLATE NOCASE",
+            (f"%{q}%",)
+        ).fetchall()
+        account_map  = {r[0]: r[1] for r in conn.execute("SELECT id, bank_name FROM accounts")}
+        contract_map = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM contracts")}
+        conn.close()
+
+        self._results = rows
+        self._tree.delete(*self._tree.get_children())
+        for row in rows:
+            did, orig, stored, etype, eid, desc, text = row
+            label  = (account_map if etype == "account" else contract_map).get(eid, f"#{eid}")
+            rubrik = "Bankkonten" if etype == "account" else "Verträge & Vers."
+            preview = ""
+            if text:
+                idx = text.lower().find(q.lower())
+                if idx >= 0:
+                    start = max(0, idx - 40)
+                    end   = min(len(text), idx + len(q) + 40)
+                    snip  = text[start:end].replace("\n", " ").replace("\r", "")
+                    preview = ("…" if start > 0 else "") + snip + ("…" if end < len(text) else "")
+            self._tree.insert("", "end", iid=str(did),
+                              values=(orig, label, rubrik, desc or "", preview))
+        n = len(rows)
+        self._info.set(f"{n} Dokument{'e' if n != 1 else ''} gefunden für: '{q}'")
+        self._status.set(f"Suche abgeschlossen  –  {n} Treffer")
+
+    def _clear(self):
+        self._query.set("")
+        self._tree.delete(*self._tree.get_children())
+        self._results = []
+        self._status.set("")
+        self._info.set("Suchbegriff eingeben und Enter drücken.")
+
+    def _open_doc(self, _event):
+        sel = self._tree.selection()
+        if not sel:
+            return
+        did = int(sel[0])
+        row = next((r for r in self._results if r[0] == did), None)
+        if row:
+            open_file(DOCS_DIR / row[2])
+
+    def _reindex(self):
+        if not messagebox.askyesno("Neu indizieren",
+                "Alle vorhandenen Dokumente neu indizieren?\n"
+                "Das kann bei vielen Dateien etwas dauern."):
+            return
+        n = reindex_all_documents()
+        messagebox.showinfo("Fertig", f"{n} Dokument(e) wurden neu indiziert.")
+
+
+# ---------------------------------------------------------------------------
 # Hauptfenster
 # ---------------------------------------------------------------------------
 class BankManagerApp(tk.Tk):
@@ -1656,6 +1831,8 @@ class BankManagerApp(tk.Tk):
         nb.add(self._contracts_tab, text="  Verträge & Versicherungen  ")
         self._settings_tab = SettingsTab(nb)
         nb.add(self._settings_tab, text="  Einstellungen  ")
+        self._search_tab = SearchTab(nb)
+        nb.add(self._search_tab, text="  Suche  ")
 
     def _switch_profile(self):
         self.destroy()
