@@ -970,16 +970,36 @@ class AccountsTab(ttk.Frame):
 
     def load(self):
         self._rows = get_all_accounts()
+        # Tag-Combobox aktualisieren
+        all_tags = get_all_tags()
+        self._tag_cb["values"] = ["(Alle)"] + [t[1] for t in all_tags]
+        self._all_tags_list = all_tags  # [(id, name, color), ...]
         self._filter()
 
     def _filter(self):
-        q = self._search.get().lower()
-        shown = self._rows if not q else [r for r in self._rows if any(q in str(v).lower() for v in r[1:])]
+        q      = self._search.get().lower()
+        sel_tag = self._tag_filter.get()
+        # Lade Tag-Zuordnungen für alle sichtbaren Rows
+        conn = sqlite3.connect(DB_PATH)
+        tag_map = {}
+        for row_data in conn.execute(
+            "SELECT at.account_id, t.name FROM account_tags at JOIN tags t ON t.id=at.tag_id"
+        ).fetchall():
+            tag_map.setdefault(row_data[0], []).append(row_data[1])
+        conn.close()
+
+        shown = self._rows
+        if q:
+            shown = [r for r in shown if any(q in str(v).lower() for v in r[1:])]
+        if sel_tag != "(Alle)":
+            shown = [r for r in shown if sel_tag in tag_map.get(r[0], [])]
+
         self._tree.delete(*self._tree.get_children())
         for r in shown:
-            _, bn, an, lu, un, _, bal, bd, _ = r
+            _, bn, an, lu, un, _, bal, bd, notes = r
+            tags_str = ", ".join(tag_map.get(r[0], []))
             self._tree.insert("", "end", iid=str(r[0]),
-                               values=(bn, an, lu, un, format_amount(bal), bd))
+                              values=(bn, an, lu, un, format_amount(bal), bd, tags_str, notes or ""))
         n, tot = len(shown), len(self._rows)
         self._status.set(f"{n} Einträge" + (f"  (von {tot})" if n != tot else ""))
         self._docs_panel.set_entity(None)
@@ -993,6 +1013,8 @@ class AccountsTab(ttk.Frame):
         self._docs_panel.set_entity(rid, r[1] if r else "")
 
     def _sort(self, col):
+        if col not in self.DB_IDX:
+            return
         self._sort_asc = not self._sort_asc if self._sort_col == col else True
         self._sort_col = col
         idx = self.DB_IDX[col]
@@ -1051,11 +1073,19 @@ class AccountsTab(ttk.Frame):
             self.load()
 
     def _export_pdf(self):
-        if not self._rows:
+        sel = self._tree.selection()
+        if sel:
+            export_rows = [r for r in self._rows if str(r[0]) in sel]
+            label = f"{len(export_rows)} ausgewählte Einträge"
+        else:
+            export_rows = self._rows
+            label = "alle Einträge"
+        if not export_rows:
             messagebox.showinfo("Keine Daten", "Keine Bankkonten vorhanden.")
             return
         show_pw = messagebox.askyesno("PDF-Export",
-            "Passwörter im Klartext exportieren?", icon="warning")
+            f"PDF für {label} erstellen?\nPasswörter im Klartext exportieren?",
+            icon="warning")
         fp = filedialog.asksaveasfilename(
             defaultextension=".pdf", filetypes=[("PDF", "*.pdf")],
             initialfile=f"Bankkonten_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
@@ -1063,7 +1093,7 @@ class AccountsTab(ttk.Frame):
         if not fp:
             return
         try:
-            export_accounts_pdf(fp, self._rows, show_pw)
+            export_accounts_pdf(fp, export_rows, show_pw)
             if messagebox.askyesno("Gespeichert", f"PDF gespeichert:\n{fp}\n\nJetzt öffnen?"):
                 os.startfile(fp)
         except Exception as e:
@@ -1110,6 +1140,13 @@ class ContractsTab(ttk.Frame):
         self._search.trace_add("write", lambda *_: self._filter())
         ttk.Entry(sf, textvariable=self._search, width=28).pack(side=tk.LEFT, padx=6)
         ttk.Button(sf, text="✕", width=3, command=lambda: self._search.set("")).pack(side=tk.LEFT)
+        tk.Frame(sf, width=1, bg="#ccc").pack(side=tk.LEFT, fill=tk.Y, pady=2, padx=8)
+        ttk.Label(sf, text="Tag:").pack(side=tk.LEFT)
+        self._tag_filter = tk.StringVar(value="(Alle)")
+        self._tag_cb = ttk.Combobox(sf, textvariable=self._tag_filter, width=16,
+                                    state="readonly")
+        self._tag_cb.pack(side=tk.LEFT, padx=4)
+        self._tag_cb.bind("<<ComboboxSelected>>", lambda _: self._filter())
 
         self._status = tk.StringVar()
         ttk.Label(self, textvariable=self._status, anchor="w",
@@ -1142,17 +1179,37 @@ class ContractsTab(ttk.Frame):
 
     def load(self):
         self._rows = get_all_contracts()
+        # Tag-Combobox aktualisieren
+        all_tags = get_all_tags()
+        self._tag_cb["values"] = ["(Alle)"] + [t[1] for t in all_tags]
+        self._all_tags_list = all_tags  # [(id, name, color), ...]
         self._filter()
 
     def _filter(self):
-        q = self._search.get().lower()
-        shown = self._rows if not q else [r for r in self._rows if any(q in str(v).lower() for v in r[1:])]
+        q      = self._search.get().lower()
+        sel_tag = self._tag_filter.get()
+        # Lade Tag-Zuordnungen für alle sichtbaren Rows
+        conn = sqlite3.connect(DB_PATH)
+        tag_map = {}
+        for row_data in conn.execute(
+            "SELECT ct.contract_id, t.name FROM contract_tags ct JOIN tags t ON t.id=ct.tag_id"
+        ).fetchall():
+            tag_map.setdefault(row_data[0], []).append(row_data[1])
+        conn.close()
+
+        shown = self._rows
+        if q:
+            shown = [r for r in shown if any(q in str(v).lower() for v in r[1:])]
+        if sel_tag != "(Alle)":
+            shown = [r for r in shown if sel_tag in tag_map.get(r[0], [])]
+
         self._tree.delete(*self._tree.get_children())
         for r in shown:
-            _, cat, name, prov, cnum, _, _, _, amt, intv, sd, ed, np_, _ = r
+            _, cat, name, prov, cnum, _, _, _, amt, intv, sd, ed, np_, notes = r
+            tags_str = ", ".join(tag_map.get(r[0], []))
             self._tree.insert("", "end", iid=str(r[0]),
-                               values=(cat, name, prov, cnum,
-                                       format_amount(amt), intv, sd, ed, np_))
+                              values=(cat, name, prov, cnum,
+                                      format_amount(amt), intv, sd, ed, np_, tags_str, notes or ""))
         n, tot = len(shown), len(self._rows)
         self._status.set(f"{n} Einträge" + (f"  (von {tot})" if n != tot else ""))
         self._docs_panel.set_entity(None)
@@ -1166,6 +1223,8 @@ class ContractsTab(ttk.Frame):
         self._docs_panel.set_entity(rid, r[2] if r else "")
 
     def _sort(self, col):
+        if col not in self.DB_IDX:
+            return
         self._sort_asc = not self._sort_asc if self._sort_col == col else True
         self._sort_col = col
         idx = self.DB_IDX[col]
@@ -1228,11 +1287,19 @@ class ContractsTab(ttk.Frame):
             self.load()
 
     def _export_pdf(self):
-        if not self._rows:
+        sel = self._tree.selection()
+        if sel:
+            export_rows = [r for r in self._rows if str(r[0]) in sel]
+            label = f"{len(export_rows)} ausgewählte Einträge"
+        else:
+            export_rows = self._rows
+            label = "alle Einträge"
+        if not export_rows:
             messagebox.showinfo("Keine Daten", "Keine Verträge vorhanden.")
             return
         show_pw = messagebox.askyesno("PDF-Export",
-            "Passwörter im Klartext exportieren?", icon="warning")
+            f"PDF für {label} erstellen?\nPasswörter im Klartext exportieren?",
+            icon="warning")
         fp = filedialog.asksaveasfilename(
             defaultextension=".pdf", filetypes=[("PDF", "*.pdf")],
             initialfile=f"Vertraege_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
@@ -1240,7 +1307,7 @@ class ContractsTab(ttk.Frame):
         if not fp:
             return
         try:
-            export_contracts_pdf(fp, self._rows, show_pw)
+            export_contracts_pdf(fp, export_rows, show_pw)
             if messagebox.askyesno("Gespeichert", f"PDF gespeichert:\n{fp}\n\nJetzt öffnen?"):
                 os.startfile(fp)
         except Exception as e:
