@@ -172,7 +172,7 @@ def get_all_accounts():
 def insert_account(bank_name, account_number, login_url, username,
                    password, balance, balance_date, notes):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO accounts (bank_name,account_number,login_url,username,"
         "password,balance,balance_date,notes) VALUES (?,?,?,?,?,?,?,?)",
         (bank_name, account_number, login_url, username,
@@ -180,7 +180,9 @@ def insert_account(bank_name, account_number, login_url, username,
          balance, balance_date, notes)
     )
     conn.commit()
+    new_id = cur.lastrowid
     conn.close()
+    return new_id
 
 
 def update_account(aid, bank_name, account_number, login_url, username,
@@ -221,7 +223,7 @@ def insert_contract(category, name, provider, contract_number, login_url,
                     username, password, amount, interval, start_date,
                     end_date, notice_period, notes):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO contracts (category,name,provider,contract_number,login_url,"
         "username,password,amount,interval,start_date,end_date,notice_period,notes) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -230,7 +232,9 @@ def insert_contract(category, name, provider, contract_number, login_url,
          amount, interval, start_date, end_date, notice_period, notes)
     )
     conn.commit()
+    new_id = cur.lastrowid
     conn.close()
+    return new_id
 
 
 def update_contract(cid, category, name, provider, contract_number, login_url,
@@ -573,8 +577,20 @@ class AccountDialog(BaseDialog):
         self._notes = tk.Text(frame, width=34, height=3, font=("Segoe UI", 9))
         self._notes.grid(row=7, column=1, sticky="ew", padx=10, pady=3)
         self._notes.insert("1.0", self._data.get("notes", ""))
+        # Tags
+        ttk.Label(frame, text="Tags", anchor="w").grid(row=8, column=0, sticky="nw", padx=10, pady=3)
+        tag_frame = ttk.Frame(frame)
+        tag_frame.grid(row=8, column=1, sticky="ew", padx=10, pady=3)
+        self._tag_vars: dict = {}
+        all_tags = get_all_tags()
+        preselected = set(self._data.get("tag_ids", []))
+        for i, (tid, tname, tcolor) in enumerate(all_tags):
+            var = tk.BooleanVar(value=(tid in preselected))
+            self._tag_vars[tid] = var
+            ttk.Checkbutton(tag_frame, text=tname, variable=var).grid(
+                row=i // 3, column=i % 3, sticky="w", padx=4)
         btn = ttk.Frame(frame)
-        btn.grid(row=8, column=0, columnspan=2, pady=(12, 0))
+        btn.grid(row=9, column=0, columnspan=2, pady=(12, 0))
         ttk.Button(btn, text="Speichern",  command=self._save,   width=14).pack(side=tk.LEFT, padx=6)
         ttk.Button(btn, text="Abbrechen",  command=self.destroy, width=14).pack(side=tk.LEFT, padx=6)
         first.focus()
@@ -598,6 +614,7 @@ class AccountDialog(BaseDialog):
             "balance":        balance,
             "balance_date":   self._vars["balance_date"].get().strip(),
             "notes":          self._notes.get("1.0", "end-1c").strip(),
+            "tag_ids":        [tid for tid, var in self._tag_vars.items() if var.get()],
         }
         self.destroy()
 
@@ -637,8 +654,20 @@ class ContractDialog(BaseDialog):
         self._notes = tk.Text(frame, width=34, height=3, font=("Segoe UI", 9))
         self._notes.grid(row=12, column=1, sticky="ew", padx=10, pady=3)
         self._notes.insert("1.0", self._data.get("notes", ""))
+        # Tags
+        ttk.Label(frame, text="Tags", anchor="w").grid(row=13, column=0, sticky="nw", padx=10, pady=3)
+        tag_frame = ttk.Frame(frame)
+        tag_frame.grid(row=13, column=1, sticky="ew", padx=10, pady=3)
+        self._tag_vars: dict = {}
+        all_tags = get_all_tags()
+        preselected = set(self._data.get("tag_ids", []))
+        for i, (tid, tname, tcolor) in enumerate(all_tags):
+            var = tk.BooleanVar(value=(tid in preselected))
+            self._tag_vars[tid] = var
+            ttk.Checkbutton(tag_frame, text=tname, variable=var).grid(
+                row=i // 3, column=i % 3, sticky="w", padx=4)
         btn = ttk.Frame(frame)
-        btn.grid(row=13, column=0, columnspan=2, pady=(12, 0))
+        btn.grid(row=14, column=0, columnspan=2, pady=(12, 0))
         ttk.Button(btn, text="Speichern",  command=self._save,   width=14).pack(side=tk.LEFT, padx=6)
         ttk.Button(btn, text="Abbrechen",  command=self.destroy, width=14).pack(side=tk.LEFT, padx=6)
         first.focus()
@@ -667,6 +696,7 @@ class ContractDialog(BaseDialog):
             "end_date":       self._vars["end_date"].get().strip(),
             "notice_period":  self._vars["notice_period"].get().strip(),
             "notes":          self._notes.get("1.0", "end-1c").strip(),
+            "tag_ids":        [tid for tid, var in self._tag_vars.items() if var.get()],
         }
         self.destroy()
 
@@ -865,11 +895,12 @@ def toolbar_btn(parent, text, command):
 # Tab: Bankkonten
 # ---------------------------------------------------------------------------
 class AccountsTab(ttk.Frame):
-    COLUMNS    = ("bank_name","account_number","login_url","username","balance","balance_date")
+    COLUMNS    = ("bank_name","account_number","login_url","username","balance","balance_date","tags","notes")
     COL_LABELS = {"bank_name":"Bank","account_number":"Kontonummer","login_url":"Login-URL",
-                  "username":"Benutzername","balance":"Kontostand","balance_date":"Stand-Datum"}
+                  "username":"Benutzername","balance":"Kontostand","balance_date":"Stand-Datum",
+                  "tags":"Tags","notes":"Notizen"}
     COL_WIDTHS = {"bank_name":150,"account_number":120,"login_url":190,
-                  "username":130,"balance":100,"balance_date":90}
+                  "username":130,"balance":100,"balance_date":90,"tags":140,"notes":180}
     DB_IDX     = {"bank_name":1,"account_number":2,"login_url":3,
                   "username":4,"balance":6,"balance_date":7}
 
@@ -899,6 +930,13 @@ class AccountsTab(ttk.Frame):
         self._search.trace_add("write", lambda *_: self._filter())
         ttk.Entry(sf, textvariable=self._search, width=28).pack(side=tk.LEFT, padx=6)
         ttk.Button(sf, text="✕", width=3, command=lambda: self._search.set("")).pack(side=tk.LEFT)
+        tk.Frame(sf, width=1, bg="#ccc").pack(side=tk.LEFT, fill=tk.Y, pady=2, padx=8)
+        ttk.Label(sf, text="Tag:").pack(side=tk.LEFT)
+        self._tag_filter = tk.StringVar(value="(Alle)")
+        self._tag_cb = ttk.Combobox(sf, textvariable=self._tag_filter, width=16,
+                                    state="readonly")
+        self._tag_cb.pack(side=tk.LEFT, padx=4)
+        self._tag_cb.bind("<<ComboboxSelected>>", lambda _: self._filter())
 
         self._status = tk.StringVar()
         ttk.Label(self, textvariable=self._status, anchor="w",
@@ -909,13 +947,18 @@ class AccountsTab(ttk.Frame):
         pw.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 0))
 
         tf = ttk.Frame(pw)
-        self._tree = ttk.Treeview(tf, columns=self.COLUMNS, show="headings", selectmode="browse")
+        vsb = ttk.Scrollbar(tf, orient="vertical")
+        hsb = ttk.Scrollbar(tf, orient="horizontal")
+        self._tree = ttk.Treeview(tf, columns=self.COLUMNS, show="headings",
+                                  selectmode="extended",
+                                  yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.config(command=self._tree.yview)
+        hsb.config(command=self._tree.xview)
         for c in self.COLUMNS:
             self._tree.heading(c, text=self.COL_LABELS[c], command=lambda x=c: self._sort(x))
-            self._tree.column(c, width=self.COL_WIDTHS[c], minwidth=50)
-        vsb = ttk.Scrollbar(tf, orient="vertical", command=self._tree.yview)
-        self._tree.configure(yscrollcommand=vsb.set)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+            self._tree.column(c, width=self.COL_WIDTHS[c], minwidth=50, stretch=False)
+        vsb.pack(side=tk.RIGHT,  fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self._tree.pack(fill=tk.BOTH, expand=True)
         self._tree.bind("<Double-1>",         lambda _: self._edit())
         self._tree.bind("<Delete>",           lambda _: self._delete())
@@ -968,9 +1011,10 @@ class AccountsTab(ttk.Frame):
         self.wait_window(dlg)
         if dlg.result:
             d = dlg.result
-            insert_account(d["bank_name"], d["account_number"], d["login_url"],
-                           d["username"], d["password"], d["balance"],
-                           d["balance_date"], d["notes"])
+            new_id = insert_account(d["bank_name"], d["account_number"], d["login_url"],
+                                    d["username"], d["password"], d["balance"],
+                                    d["balance_date"], d["notes"])
+            set_entry_tags("account", new_id, d.get("tag_ids", []))
             self.load()
 
     def _edit(self):
@@ -985,6 +1029,7 @@ class AccountsTab(ttk.Frame):
             "login_url": lu or "", "username": un or "",
             "password":  decrypt(pw_enc) if pw_enc else "",
             "balance":   format_amount(bal), "balance_date": bd or "", "notes": notes or "",
+            "tag_ids":   [t[0] for t in get_entry_tags("account", rid)],
         })
         self.wait_window(dlg)
         if dlg.result:
@@ -992,6 +1037,7 @@ class AccountsTab(ttk.Frame):
             update_account(rid, d["bank_name"], d["account_number"], d["login_url"],
                            d["username"], d["password"], d["balance"],
                            d["balance_date"], d["notes"])
+            set_entry_tags("account", rid, d.get("tag_ids", []))
             self.load()
 
     def _delete(self):
@@ -1029,12 +1075,14 @@ class AccountsTab(ttk.Frame):
 # ---------------------------------------------------------------------------
 class ContractsTab(ttk.Frame):
     COLUMNS    = ("category","name","provider","contract_number","amount","interval",
-                  "start_date","end_date","notice_period")
+                  "start_date","end_date","notice_period","tags","notes")
     COL_LABELS = {"category":"Kategorie","name":"Bezeichnung","provider":"Anbieter",
                   "contract_number":"Vertragsnr.","amount":"Betrag","interval":"Rhythmus",
-                  "start_date":"Beginn","end_date":"Ende","notice_period":"Kündigung"}
+                  "start_date":"Beginn","end_date":"Ende","notice_period":"Kündigung",
+                  "tags":"Tags","notes":"Notizen"}
     COL_WIDTHS = {"category":100,"name":160,"provider":130,"contract_number":100,
-                  "amount":90,"interval":90,"start_date":90,"end_date":90,"notice_period":90}
+                  "amount":90,"interval":90,"start_date":90,"end_date":90,"notice_period":90,
+                  "tags":140,"notes":180}
     DB_IDX     = {"category":1,"name":2,"provider":3,"contract_number":4,
                   "amount":8,"interval":9,"start_date":10,"end_date":11,"notice_period":12}
 
@@ -1071,13 +1119,18 @@ class ContractsTab(ttk.Frame):
         pw.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 0))
 
         tf = ttk.Frame(pw)
-        self._tree = ttk.Treeview(tf, columns=self.COLUMNS, show="headings", selectmode="browse")
+        vsb = ttk.Scrollbar(tf, orient="vertical")
+        hsb = ttk.Scrollbar(tf, orient="horizontal")
+        self._tree = ttk.Treeview(tf, columns=self.COLUMNS, show="headings",
+                                  selectmode="extended",
+                                  yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.config(command=self._tree.yview)
+        hsb.config(command=self._tree.xview)
         for c in self.COLUMNS:
             self._tree.heading(c, text=self.COL_LABELS[c], command=lambda x=c: self._sort(x))
-            self._tree.column(c, width=self.COL_WIDTHS[c], minwidth=50)
-        vsb = ttk.Scrollbar(tf, orient="vertical", command=self._tree.yview)
-        self._tree.configure(yscrollcommand=vsb.set)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+            self._tree.column(c, width=self.COL_WIDTHS[c], minwidth=50, stretch=False)
+        vsb.pack(side=tk.RIGHT,  fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self._tree.pack(fill=tk.BOTH, expand=True)
         self._tree.bind("<Double-1>",         lambda _: self._edit())
         self._tree.bind("<Delete>",           lambda _: self._delete())
@@ -1131,10 +1184,11 @@ class ContractsTab(ttk.Frame):
         self.wait_window(dlg)
         if dlg.result:
             d = dlg.result
-            insert_contract(d["category"], d["name"], d["provider"], d["contract_number"],
-                            d["login_url"], d["username"], d["password"], d["amount"],
-                            d["interval"], d["start_date"], d["end_date"],
-                            d["notice_period"], d["notes"])
+            new_id = insert_contract(d["category"], d["name"], d["provider"], d["contract_number"],
+                                     d["login_url"], d["username"], d["password"], d["amount"],
+                                     d["interval"], d["start_date"], d["end_date"],
+                                     d["notice_period"], d["notes"])
+            set_entry_tags("contract", new_id, d.get("tag_ids", []))
             self.load()
 
     def _edit(self):
@@ -1151,6 +1205,7 @@ class ContractsTab(ttk.Frame):
             "amount": format_amount(amt), "interval": intv or "",
             "start_date": sd or "", "end_date": ed or "",
             "notice_period": np_ or "", "notes": notes or "",
+            "tag_ids": [t[0] for t in get_entry_tags("contract", rid)],
         })
         self.wait_window(dlg)
         if dlg.result:
@@ -1159,6 +1214,7 @@ class ContractsTab(ttk.Frame):
                             d["contract_number"], d["login_url"], d["username"],
                             d["password"], d["amount"], d["interval"],
                             d["start_date"], d["end_date"], d["notice_period"], d["notes"])
+            set_entry_tags("contract", rid, d.get("tag_ids", []))
             self.load()
 
     def _delete(self):
