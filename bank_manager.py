@@ -367,7 +367,7 @@ def add_document(entity_type: str, entity_id: int, src_path: str, description: s
     stored_name = f"{uuid4().hex}{src.suffix.lower()}"
     dest = DOCS_DIR / stored_name
     shutil.copy2(src, dest)
-    text_content = extract_text_from_file(dest)
+    text_content, _ = extract_text_from_file(dest)
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT INTO documents (entity_type,entity_id,original_name,stored_name,file_size,description,text_content) "
@@ -407,18 +407,23 @@ def delete_entity_documents(entity_type: str, entity_id: int):
     conn.close()
 
 
-def reindex_all_documents():
+def reindex_all_documents() -> tuple[int, list[str]]:
+    """Returns (success_count, list_of_error_messages)."""
     conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT id, stored_name FROM documents").fetchall()
-    updated = 0
-    for did, stored_name in rows:
+    rows = conn.execute("SELECT id, stored_name, original_name FROM documents").fetchall()
+    success = 0
+    errors = []
+    for did, stored_name, orig_name in rows:
         path = DOCS_DIR / stored_name
-        text = extract_text_from_file(path)
+        text, err = extract_text_from_file(path)
         conn.execute("UPDATE documents SET text_content=? WHERE id=?", (text, did))
-        updated += 1
+        if err:
+            errors.append(f"{orig_name}: {err}")
+        else:
+            success += 1
     conn.commit()
     conn.close()
-    return updated
+    return success, errors
 
 
 # --- Tags CRUD ---
@@ -519,40 +524,48 @@ def open_file(path: Path):
         subprocess.run(["xdg-open", str(path)])
 
 
-def extract_text_from_file(path: Path) -> str:
+def extract_text_from_file(path: Path) -> tuple[str, str]:
+    """Returns (extracted_text, error_message). error_message is "" on success."""
+    if not path.exists():
+        return "", f"Datei nicht gefunden: {path.name}"
     suffix = path.suffix.lower()
     try:
         if suffix == ".pdf":
             try:
                 import pdfplumber
-                with pdfplumber.open(path) as pdf:
-                    return "\n".join(p.extract_text() or "" for p in pdf.pages)
             except ImportError:
-                pass
+                return "", "pdfplumber nicht installiert (pip install pdfplumber)"
+            with pdfplumber.open(path) as pdf:
+                text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+            if not text.strip():
+                return "", "PDF enthält keinen extrahierbaren Text (evtl. nur Bilder)"
+            return text, ""
         elif suffix == ".docx":
             try:
                 from docx import Document as DocxDoc
-                return "\n".join(p.text for p in DocxDoc(path).paragraphs)
             except ImportError:
-                pass
+                return "", "python-docx nicht installiert (pip install python-docx)"
+            text = "\n".join(p.text for p in DocxDoc(path).paragraphs)
+            return text, ""
         elif suffix in (".xlsx", ".xls"):
             try:
                 import openpyxl
-                wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-                parts = []
-                for ws in wb.worksheets:
-                    for row in ws.iter_rows():
-                        for cell in row:
-                            if cell.value is not None:
-                                parts.append(str(cell.value))
-                return " ".join(parts)
             except ImportError:
-                pass
+                return "", "openpyxl nicht installiert (pip install openpyxl)"
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            parts = []
+            for ws in wb.worksheets:
+                for row in ws.iter_rows():
+                    for cell in row:
+                        if cell.value is not None:
+                            parts.append(str(cell.value))
+            return " ".join(parts), ""
         elif suffix in (".txt", ".csv", ".md", ".json", ".xml", ".html", ".htm"):
-            return path.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        pass
-    return ""
+            return path.read_text(encoding="utf-8", errors="ignore"), ""
+        else:
+            return "", f"Format {suffix} wird nicht unterstützt"
+    except Exception as e:
+        return "", str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -1769,7 +1782,18 @@ class SearchTab(ttk.Frame):
                               values=(orig, label, rubrik, desc or "", preview))
         n = len(rows)
         self._info.set(f"{n} Dokument{'e' if n != 1 else ''} gefunden für: '{q}'")
-        self._status.set(f"Suche abgeschlossen  –  {n} Treffer")
+        if n == 0:
+            conn2 = sqlite3.connect(DB_PATH)
+            unindexed = conn2.execute(
+                "SELECT COUNT(*) FROM documents WHERE text_content IS NULL OR text_content = ''"
+            ).fetchone()[0]
+            conn2.close()
+            hint = ""
+            if unindexed:
+                hint = f"  ·  {unindexed} Dokument(e) noch nicht indiziert → 'Alle neu indizieren' klicken"
+            self._status.set(f"Keine Treffer.{hint}")
+        else:
+            self._status.set(f"Suche abgeschlossen  –  {n} Treffer")
 
     def _clear(self):
         self._query.set("")
@@ -1792,8 +1816,15 @@ class SearchTab(ttk.Frame):
                 "Alle vorhandenen Dokumente neu indizieren?\n"
                 "Das kann bei vielen Dateien etwas dauern."):
             return
-        n = reindex_all_documents()
-        messagebox.showinfo("Fertig", f"{n} Dokument(e) wurden neu indiziert.")
+        success, errors = reindex_all_documents()
+        msg = f"{success} Dokument(e) erfolgreich indiziert."
+        if errors:
+            msg += f"\n\n{len(errors)} Fehler:\n" + "\n".join(errors[:10])
+            if len(errors) > 10:
+                msg += f"\n… und {len(errors) - 10} weitere."
+            messagebox.showwarning("Fertig (mit Fehlern)", msg)
+        else:
+            messagebox.showinfo("Fertig", msg)
 
 
 # ---------------------------------------------------------------------------
