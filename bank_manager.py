@@ -29,7 +29,17 @@ from reportlab.lib.enums import TA_CENTER
 # ---------------------------------------------------------------------------
 # Datenbankpfad & Verschlüsselung
 # ---------------------------------------------------------------------------
-APP_DIR       = Path(os.getenv("APPDATA", Path.home())) / "BankAccountManager"
+# Portable-Modus: wenn neben der .py/.pyw-Datei ein "profiles"-Ordner existiert
+# (oder der übergeordnete Ordner beschreibbar ist), liegen Daten dort.
+_SCRIPT_DIR = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
+
+# Portable-Modus: wenn neben der .pyw-Datei ein "profiles"-Ordner existiert,
+# werden alle Daten dort gespeichert (z. B. für USB-Stick-Nutzung).
+if (_SCRIPT_DIR / "profiles").exists():
+    APP_DIR = _SCRIPT_DIR
+else:
+    APP_DIR = Path(os.getenv("APPDATA", Path.home())) / "BankAccountManager"
+
 PROFILES_DIR  = APP_DIR / "profiles"
 PROFILES_FILE = APP_DIR / "profiles.json"
 APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -1846,7 +1856,7 @@ class BankManagerApp(tk.Tk):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     APP_DIR.mkdir(parents=True, exist_ok=True)
-    PROFILES_DIR.mkdir(exist_ok=True)
+    PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 
     root = tk.Tk()
     root.withdraw()
