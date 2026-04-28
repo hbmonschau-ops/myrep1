@@ -210,6 +210,17 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # --- Verknüpfung Dokument ↔ Tags ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS document_tags (
+            document_id INTEGER NOT NULL,
+            tag_id      INTEGER NOT NULL,
+            PRIMARY KEY (document_id, tag_id),
+            FOREIGN KEY (document_id) REFERENCES documents(id),
+            FOREIGN KEY (tag_id) REFERENCES tags(id)
+        )
+    """)
+
     # --- Tags-Verwaltung ---
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tags (
@@ -352,15 +363,40 @@ def delete_contract(cid):
 def get_documents(entity_type: str, entity_id: int):
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT id, original_name, stored_name, file_size, description, created_at "
-        "FROM documents WHERE entity_type=? AND entity_id=? ORDER BY created_at",
+        "SELECT d.id, d.original_name, d.stored_name, d.file_size, d.description, d.created_at, "
+        "COALESCE(GROUP_CONCAT(t.name, ', '), '') "
+        "FROM documents d "
+        "LEFT JOIN document_tags dt ON dt.document_id = d.id "
+        "LEFT JOIN tags t ON t.id = dt.tag_id "
+        "WHERE d.entity_type=? AND d.entity_id=? "
+        "GROUP BY d.id ORDER BY d.created_at",
         (entity_type, entity_id)
     ).fetchall()
     conn.close()
     return rows
 
 
-def add_document(entity_type: str, entity_id: int, src_path: str, description: str = "") -> bool:
+def get_document_tags(doc_id: int) -> list:
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute(
+        "SELECT tag_id FROM document_tags WHERE document_id=?", (doc_id,)
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def set_document_tags(doc_id: int, tag_ids: list):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM document_tags WHERE document_id=?", (doc_id,))
+    for tid in tag_ids:
+        conn.execute("INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?,?)",
+                     (doc_id, tid))
+    conn.commit()
+    conn.close()
+
+
+def add_document(entity_type: str, entity_id: int, src_path: str, description: str = "",
+                 tag_ids: list = None) -> bool:
     src = Path(src_path)
     if not src.exists():
         return False
@@ -369,11 +405,15 @@ def add_document(entity_type: str, entity_id: int, src_path: str, description: s
     shutil.copy2(src, dest)
     text_content, _ = extract_text_from_file(dest)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO documents (entity_type,entity_id,original_name,stored_name,file_size,description,text_content) "
         "VALUES (?,?,?,?,?,?,?)",
         (entity_type, entity_id, src.name, stored_name, dest.stat().st_size, description, text_content)
     )
+    doc_id = cur.lastrowid
+    for tid in (tag_ids or []):
+        conn.execute("INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?,?)",
+                     (doc_id, tid))
     conn.commit()
     conn.close()
     return True
@@ -1003,30 +1043,37 @@ class ProfileSelectionDialog(tk.Toplevel):
 # Dialog: optionale Beschreibung beim Datei-Upload
 # ---------------------------------------------------------------------------
 class _DescriptionDialog(tk.Toplevel):
-    def __init__(self, parent, filename: str):
+    """Dialog für Beschreibung + Tags beim Hochladen/Bearbeiten eines Dokuments."""
+    def __init__(self, parent, filename: str, description: str = "", preselected_tag_ids: list = None):
         super().__init__(parent)
-        self.title("Beschreibung")
+        self.title("Dokument-Details")
         self.resizable(False, False)
         self.grab_set()
-        self.result = ""
-        ttk.Label(self, text=f"Beschreibung (optional):\n{filename}",
-                  padding=(12, 8, 12, 4), justify="left").pack()
-        self._var = tk.StringVar()
-        e = ttk.Entry(self, textvariable=self._var, width=36)
-        e.pack(padx=12, pady=4)
+        self.result_desc = ""
+        self.result_tags = []
+        ttk.Label(self, text=f"Datei: {filename}",
+                  padding=(12, 8, 12, 2), justify="left", font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        ttk.Label(self, text="Beschreibung (optional):",
+                  padding=(12, 2, 12, 0)).pack(anchor="w")
+        self._var = tk.StringVar(value=description)
+        e = ttk.Entry(self, textvariable=self._var, width=40)
+        e.pack(padx=12, pady=(2, 8), fill=tk.X)
         e.focus()
-        e.bind("<Return>", lambda _: self._ok())
+        ttk.Label(self, text="Tags:", padding=(12, 0, 12, 0)).pack(anchor="w")
+        self._tag_selector = TagSelector(self, get_all_tags(), preselected_tag_ids or [])
+        self._tag_selector.pack(padx=12, pady=(2, 8), fill=tk.X)
         btn = ttk.Frame(self, padding=(12, 6))
         btn.pack()
         ttk.Button(btn, text="OK",           command=self._ok,     width=10).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn, text="Überspringen", command=self.destroy, width=12).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn, text="Abbrechen",    command=self.destroy, width=12).pack(side=tk.LEFT, padx=4)
         self.update_idletasks()
         x = parent.winfo_rootx() + (parent.winfo_width()  - self.winfo_width())  // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{x}+{y}")
 
     def _ok(self):
-        self.result = self._var.get().strip()
+        self.result_desc = self._var.get().strip()
+        self.result_tags = self._tag_selector.get_selected_ids()
         self.destroy()
 
 
@@ -1050,25 +1097,28 @@ class DocumentsPanel(ttk.LabelFrame):
             font=("Segoe UI", 9, "bold"), relief="flat", padx=8, pady=3, cursor="hand2")
         self._btn_add  = mkbtn("＋ Hinzufügen",   self._add)
         self._btn_open = mkbtn("↗ Öffnen",        self._open)
+        self._btn_edit = mkbtn("✎ Bearbeiten",    self._edit)
         self._btn_save = mkbtn("⬇ Speichern als", self._save_as)
         self._btn_del  = mkbtn("✕ Entfernen",     self._remove)
-        for b in (self._btn_add, self._btn_open, self._btn_save, self._btn_del):
+        for b in (self._btn_add, self._btn_open, self._btn_edit, self._btn_save, self._btn_del):
             b.pack(side=tk.LEFT, padx=(0, 3))
         self._lbl = tk.Label(tb, text="(kein Eintrag ausgewählt)",
                              fg="#888", font=("Segoe UI", 8, "italic"), bg="#f0f4f8")
         self._lbl.pack(side=tk.LEFT, padx=10)
 
-        cols = ("original_name", "description", "file_size", "created_at")
+        cols = ("original_name", "description", "tags", "file_size", "created_at")
         self._tree = ttk.Treeview(self, columns=cols, show="headings",
                                   selectmode="browse", height=4)
         self._tree.heading("original_name", text="Dateiname")
         self._tree.heading("description",   text="Beschreibung")
+        self._tree.heading("tags",          text="Tags")
         self._tree.heading("file_size",     text="Größe")
         self._tree.heading("created_at",    text="Hinzugefügt")
-        self._tree.column("original_name", width=220, minwidth=120)
-        self._tree.column("description",   width=200, minwidth=80)
-        self._tree.column("file_size",     width=70,  minwidth=50, anchor="e")
-        self._tree.column("created_at",    width=130, minwidth=100)
+        self._tree.column("original_name", width=200, minwidth=100, stretch=False)
+        self._tree.column("description",   width=180, minwidth=80,  stretch=False)
+        self._tree.column("tags",          width=140, minwidth=60,  stretch=False)
+        self._tree.column("file_size",     width=70,  minwidth=50,  stretch=False, anchor="e")
+        self._tree.column("created_at",    width=130, minwidth=100, stretch=False)
         vsb = ttk.Scrollbar(self, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1093,12 +1143,12 @@ class DocumentsPanel(ttk.LabelFrame):
             return
         self._docs = get_documents(self._entity_type, self._entity_id)
         for d in self._docs:
-            did, orig, stored, fsize, desc, created = d
+            did, orig, stored, fsize, desc, created, tags = d
             self._tree.insert("", "end", iid=str(did),
-                              values=(orig, desc or "", format_size(fsize), created))
+                              values=(orig, desc or "", tags or "", format_size(fsize), created))
 
     def _set_state(self, state: str):
-        for b in (self._btn_add, self._btn_open, self._btn_save, self._btn_del):
+        for b in (self._btn_add, self._btn_open, self._btn_edit, self._btn_save, self._btn_del):
             b.config(state=state)
 
     def _sel_id(self):
@@ -1123,13 +1173,14 @@ class DocumentsPanel(ttk.LabelFrame):
         )
         if not paths:
             return
-        desc = ""
+        desc, tag_ids = "", []
         if len(paths) == 1:
             dlg = _DescriptionDialog(self.winfo_toplevel(), Path(paths[0]).name)
             self.wait_window(dlg)
-            desc = dlg.result or ""
+            desc = dlg.result_desc
+            tag_ids = dlg.result_tags
         for p in paths:
-            add_document(self._entity_type, self._entity_id, p, desc)
+            add_document(self._entity_type, self._entity_id, p, desc, tag_ids)
         self._refresh()
 
     def _open(self):
@@ -1140,6 +1191,28 @@ class DocumentsPanel(ttk.LabelFrame):
         row = self._doc_row(did)
         if row:
             open_file(DOCS_DIR / row[2])
+
+    def _edit(self):
+        did = self._sel_id()
+        if did is None:
+            messagebox.showinfo("Hinweis", "Bitte eine Datei auswählen.")
+            return
+        row = self._doc_row(did)
+        if not row:
+            return
+        dlg = _DescriptionDialog(
+            self.winfo_toplevel(), row[1],
+            description=row[4] or "",
+            preselected_tag_ids=get_document_tags(did)
+        )
+        self.wait_window(dlg)
+        if dlg.result_desc is not None or dlg.result_tags is not None:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("UPDATE documents SET description=? WHERE id=?", (dlg.result_desc, did))
+            conn.commit()
+            conn.close()
+            set_document_tags(did, dlg.result_tags)
+            self._refresh()
 
     def _save_as(self):
         did = self._sel_id()
