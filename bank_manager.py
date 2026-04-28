@@ -1150,6 +1150,13 @@ class DocumentsPanel(ttk.LabelFrame):
         self._lbl = tk.Label(tb, text="(kein Eintrag ausgewählt)",
                              fg="#888", font=("Segoe UI", 8, "italic"), bg="#f0f4f8")
         self._lbl.pack(side=tk.LEFT, padx=10)
+        tk.Frame(tb, width=1, bg="#ccc").pack(side=tk.RIGHT, fill=tk.Y, pady=3, padx=4)
+        self._doc_tag_filter = tk.StringVar(value="(Alle)")
+        self._doc_tag_cb = tk.OptionMenu(tb, self._doc_tag_filter, "(Alle)")
+        self._doc_tag_cb.config(bg="#f0f4f8", relief="flat", font=("Segoe UI", 9), fg="#1a3c5e")
+        self._doc_tag_cb.pack(side=tk.RIGHT)
+        tk.Label(tb, text="Tag:", bg="#f0f4f8", fg="#1a3c5e",
+                 font=("Segoe UI", 9)).pack(side=tk.RIGHT, padx=(4, 0))
 
         cols = ("original_name", "description", "tags", "file_size", "created_at")
         self._tree = ttk.Treeview(self, columns=cols, show="headings",
@@ -1180,6 +1187,7 @@ class DocumentsPanel(ttk.LabelFrame):
             return
         self._lbl.config(text=f"→  {label}")
         self._set_state("normal")
+        self._update_tag_menu()
         self._refresh()
 
     def _refresh(self):
@@ -1187,10 +1195,22 @@ class DocumentsPanel(ttk.LabelFrame):
         if self._entity_id is None:
             return
         self._docs = get_documents(self._entity_type, self._entity_id)
+        sel_tag = self._doc_tag_filter.get() if hasattr(self, '_doc_tag_filter') else "(Alle)"
         for d in self._docs:
             did, orig, stored, fsize, desc, created, tags = d
+            if sel_tag != "(Alle)" and sel_tag not in (tags or "").split(", "):
+                continue
             self._tree.insert("", "end", iid=str(did),
                               values=(orig, desc or "", tags or "", format_size(fsize), created))
+
+    def _update_tag_menu(self):
+        tags = get_all_tags()
+        menu = self._doc_tag_cb["menu"]
+        menu.delete(0, "end")
+        for val in ["(Alle)"] + [t[1] for t in tags]:
+            menu.add_command(label=val,
+                             command=lambda v=val: (self._doc_tag_filter.set(v), self._refresh()))
+        self._doc_tag_filter.set("(Alle)")
 
     def _set_state(self, state: str):
         for b in (self._btn_add, self._btn_open, self._btn_edit, self._btn_save, self._btn_del):
@@ -1786,35 +1806,59 @@ class SettingsTab(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         self._tags: list = []
+        self._cats: list = []
         self._build_ui()
         self.load()
 
     def _build_ui(self):
-        tb = tk.Frame(self, bg=TB_BG, height=40)
-        tb.pack(fill=tk.X)
-        tb.pack_propagate(False)
-        toolbar_btn(tb, "＋  Neu",       self._add).pack(side=tk.LEFT, padx=(8,2), pady=5)
-        toolbar_btn(tb, "✎  Bearbeiten", self._edit).pack(side=tk.LEFT, padx=2, pady=5)
-        toolbar_btn(tb, "✕  Löschen",   self._delete).pack(side=tk.LEFT, padx=2, pady=5)
+        # ---- Tags ----
+        hdr_t = ttk.Frame(self, padding=(16, 10, 0, 4))
+        hdr_t.pack(fill=tk.X)
+        ttk.Label(hdr_t, text="Tag-Verwaltung", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
+        tb_t = tk.Frame(self, bg=TB_BG, height=36)
+        tb_t.pack(fill=tk.X)
+        tb_t.pack_propagate(False)
+        toolbar_btn(tb_t, "＋  Neu",       self._add_tag).pack(side=tk.LEFT, padx=(8,2), pady=4)
+        toolbar_btn(tb_t, "✎  Bearbeiten", self._edit_tag).pack(side=tk.LEFT, padx=2, pady=4)
+        toolbar_btn(tb_t, "✕  Löschen",   self._del_tag).pack(side=tk.LEFT, padx=2, pady=4)
+        tf_t = ttk.Frame(self, padding=(16, 4, 16, 0))
+        tf_t.pack(fill=tk.BOTH, expand=True)
+        self._tag_tree = ttk.Treeview(tf_t, columns=("name", "color"), show="headings",
+                                      selectmode="browse", height=10)
+        self._tag_tree.heading("name",  text="Tag-Name")
+        self._tag_tree.heading("color", text="Farbe")
+        self._tag_tree.column("name",  width=250, minwidth=120)
+        self._tag_tree.column("color", width=120, minwidth=80)
+        vsb_t = ttk.Scrollbar(tf_t, orient="vertical", command=self._tag_tree.yview)
+        self._tag_tree.configure(yscrollcommand=vsb_t.set)
+        vsb_t.pack(side=tk.RIGHT, fill=tk.Y)
+        self._tag_tree.pack(fill=tk.BOTH, expand=True)
+        self._tag_tree.bind("<Double-1>", lambda _: self._edit_tag())
+        self._tag_tree.bind("<Delete>",   lambda _: self._del_tag())
 
-        hdr = ttk.Frame(self, padding=(16, 12, 0, 4))
-        hdr.pack(fill=tk.X)
-        ttk.Label(hdr, text="Tag-Verwaltung", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
-
-        tf = ttk.Frame(self, padding=(16, 0, 16, 0))
-        tf.pack(fill=tk.BOTH, expand=True)
-        self._tree = ttk.Treeview(tf, columns=("name", "color"), show="headings",
-                                  selectmode="browse", height=20)
-        self._tree.heading("name",  text="Tag-Name")
-        self._tree.heading("color", text="Farbe")
-        self._tree.column("name",  width=250, minwidth=120)
-        self._tree.column("color", width=120, minwidth=80)
-        vsb = ttk.Scrollbar(tf, orient="vertical", command=self._tree.yview)
-        self._tree.configure(yscrollcommand=vsb.set)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._tree.pack(fill=tk.BOTH, expand=True)
-        self._tree.bind("<Double-1>", lambda _: self._edit())
-        self._tree.bind("<Delete>",   lambda _: self._delete())
+        # ---- Kategorien ----
+        ttk.Separator(self, orient="horizontal").pack(fill=tk.X, padx=16, pady=6)
+        hdr_c = ttk.Frame(self, padding=(16, 4, 0, 4))
+        hdr_c.pack(fill=tk.X)
+        ttk.Label(hdr_c, text="Kategorie-Verwaltung", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
+        tb_c = tk.Frame(self, bg=TB_BG, height=36)
+        tb_c.pack(fill=tk.X)
+        tb_c.pack_propagate(False)
+        toolbar_btn(tb_c, "＋  Neu",       self._add_cat).pack(side=tk.LEFT, padx=(8,2), pady=4)
+        toolbar_btn(tb_c, "✎  Bearbeiten", self._edit_cat).pack(side=tk.LEFT, padx=2, pady=4)
+        toolbar_btn(tb_c, "✕  Löschen",   self._del_cat).pack(side=tk.LEFT, padx=2, pady=4)
+        tf_c = ttk.Frame(self, padding=(16, 4, 16, 0))
+        tf_c.pack(fill=tk.BOTH, expand=True)
+        self._cat_tree = ttk.Treeview(tf_c, columns=("name",), show="headings",
+                                      selectmode="browse", height=8)
+        self._cat_tree.heading("name", text="Kategorie")
+        self._cat_tree.column("name", width=300, minwidth=120)
+        vsb_c = ttk.Scrollbar(tf_c, orient="vertical", command=self._cat_tree.yview)
+        self._cat_tree.configure(yscrollcommand=vsb_c.set)
+        vsb_c.pack(side=tk.RIGHT, fill=tk.Y)
+        self._cat_tree.pack(fill=tk.BOTH, expand=True)
+        self._cat_tree.bind("<Double-1>", lambda _: self._edit_cat())
+        self._cat_tree.bind("<Delete>",   lambda _: self._del_cat())
 
         self._status = tk.StringVar()
         ttk.Label(self, textvariable=self._status, anchor="w",
@@ -1822,27 +1866,32 @@ class SettingsTab(ttk.Frame):
 
     def load(self):
         self._tags = get_all_tags()
-        self._tree.delete(*self._tree.get_children())
+        self._tag_tree.delete(*self._tag_tree.get_children())
         for t in self._tags:
-            self._tree.insert("", "end", iid=str(t[0]), values=(t[1], t[2]))
-        self._status.set(f"{len(self._tags)} Tags")
+            self._tag_tree.insert("", "end", iid=f"t{t[0]}", values=(t[1], t[2]))
+        self._cats = get_all_categories()
+        self._cat_tree.delete(*self._cat_tree.get_children())
+        for c in self._cats:
+            self._cat_tree.insert("", "end", iid=f"c{c[0]}", values=(c[1],))
+        self._status.set(f"{len(self._tags)} Tags  |  {len(self._cats)} Kategorien")
 
-    def _sel_id(self):
-        s = self._tree.selection()
-        return int(s[0]) if s else None
+    # --- Tags ---
+    def _sel_tag_id(self):
+        s = self._tag_tree.selection()
+        return int(s[0][1:]) if s else None
 
     def _tag_row(self, tid):
         return next((t for t in self._tags if t[0] == tid), None)
 
-    def _add(self):
+    def _add_tag(self):
         dlg = _TagDialog(self.winfo_toplevel(), "Neuen Tag anlegen")
         self.wait_window(dlg)
         if dlg.result:
             insert_tag(dlg.result["name"], dlg.result["color"])
             self.load()
 
-    def _edit(self):
-        tid = self._sel_id()
+    def _edit_tag(self):
+        tid = self._sel_tag_id()
         if tid is None:
             messagebox.showinfo("Hinweis", "Bitte einen Tag auswählen.")
             return
@@ -1854,16 +1903,53 @@ class SettingsTab(ttk.Frame):
             update_tag(tid, dlg.result["name"], dlg.result["color"])
             self.load()
 
-    def _delete(self):
-        tid = self._sel_id()
+    def _del_tag(self):
+        tid = self._sel_tag_id()
         if tid is None:
             messagebox.showinfo("Hinweis", "Bitte einen Tag auswählen.")
             return
         row = self._tag_row(tid)
         if messagebox.askyesno("Löschen",
-                f'Tag „{row[1]}" wirklich löschen?\n'
-                "Er wird von allen Einträgen entfernt.", icon="warning"):
+                f'Tag „{row[1]}" wirklich löschen?\nEr wird von allen Einträgen entfernt.',
+                icon="warning"):
             delete_tag(tid)
+            self.load()
+
+    # --- Kategorien ---
+    def _sel_cat_id(self):
+        s = self._cat_tree.selection()
+        return int(s[0][1:]) if s else None
+
+    def _cat_row(self, cid):
+        return next((c for c in self._cats if c[0] == cid), None)
+
+    def _add_cat(self):
+        name = simpledialog.askstring("Neue Kategorie", "Kategoriename:", parent=self)
+        if name and name.strip():
+            insert_category(name.strip())
+            self.load()
+
+    def _edit_cat(self):
+        cid = self._sel_cat_id()
+        if cid is None:
+            messagebox.showinfo("Hinweis", "Bitte eine Kategorie auswählen.")
+            return
+        row = self._cat_row(cid)
+        new_name = simpledialog.askstring("Kategorie umbenennen",
+                                          "Neuer Name:", initialvalue=row[1], parent=self)
+        if new_name and new_name.strip():
+            update_category(cid, new_name.strip())
+            self.load()
+
+    def _del_cat(self):
+        cid = self._sel_cat_id()
+        if cid is None:
+            messagebox.showinfo("Hinweis", "Bitte eine Kategorie auswählen.")
+            return
+        row = self._cat_row(cid)
+        if messagebox.askyesno("Löschen",
+                f'Kategorie „{row[1]}" wirklich löschen?', icon="warning"):
+            delete_category(cid)
             self.load()
 
 
@@ -1892,6 +1978,24 @@ class SearchTab(ttk.Frame):
         tk.Frame(sf, width=1, bg="#ccc").pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
         ttk.Button(sf, text="Alle neu indizieren",
                    command=self._reindex, width=18).pack(side=tk.LEFT)
+
+        ff = ttk.Frame(self, padding=(12, 0, 12, 4))
+        ff.pack(fill=tk.X)
+        ttk.Label(ff, text="Kategorie:").pack(side=tk.LEFT)
+        self._cat_filter = tk.StringVar(value="(Alle)")
+        self._cat_cb = ttk.Combobox(ff, textvariable=self._cat_filter, width=16, state="readonly")
+        self._cat_cb.pack(side=tk.LEFT, padx=(4, 12))
+        self._cat_cb.bind("<<ComboboxSelected>>", lambda _: self._apply_filters())
+        ttk.Label(ff, text="Tag:").pack(side=tk.LEFT)
+        self._tag_filter = tk.StringVar(value="(Alle)")
+        self._tag_cb = ttk.Combobox(ff, textvariable=self._tag_filter, width=16, state="readonly")
+        self._tag_cb.pack(side=tk.LEFT, padx=4)
+        self._tag_cb.bind("<<ComboboxSelected>>", lambda _: self._apply_filters())
+        ttk.Label(ff, text="Sortieren nach:").pack(side=tk.LEFT, padx=(12, 0))
+        self._sort_col = tk.StringVar(value="Dateiname")
+        ttk.Combobox(ff, textvariable=self._sort_col, width=14, state="readonly",
+                     values=["Dateiname", "Eintrag", "Rubrik"]).pack(side=tk.LEFT, padx=4)
+        self._sort_col.trace_add("write", lambda *_: self._apply_filters())
 
         self._info = tk.StringVar(value="Suchbegriff eingeben und Enter drücken.")
         ttk.Label(self, textvariable=self._info, padding=(12, 2),
@@ -1941,6 +2045,12 @@ class SearchTab(ttk.Frame):
         contract_map = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM contracts")}
         conn.close()
 
+        # populate filter combos
+        all_cats = get_all_categories()
+        self._cat_cb["values"] = ["(Alle)"] + [c[1] for c in all_cats]
+        all_tags = get_all_tags()
+        self._tag_cb["values"] = ["(Alle)"] + [t[1] for t in all_tags]
+
         self._results = rows
         self._tree.delete(*self._tree.get_children())
         for row in rows:
@@ -1971,6 +2081,64 @@ class SearchTab(ttk.Frame):
             self._status.set(f"Keine Treffer.{hint}")
         else:
             self._status.set(f"Suche abgeschlossen  –  {n} Treffer")
+
+    def _apply_filters(self):
+        if not self._results:
+            return
+        sel_cat = self._cat_filter.get()
+        sel_tag = self._tag_filter.get()
+        sort_by = self._sort_col.get()
+        sort_map = {"Dateiname": 1, "Eintrag": 2, "Rubrik": 3}
+        sort_idx = sort_map.get(sort_by, 1)
+
+        conn = sqlite3.connect(DB_PATH)
+        acc_cat = {r[0]: r[9] for r in conn.execute(
+            "SELECT id,bank_name,account_number,login_url,username,password,balance,balance_date,notes,category FROM accounts").fetchall()}
+        con_cat = {r[0]: r[1] for r in conn.execute("SELECT id,category FROM contracts").fetchall()}
+        doc_tags = {}
+        for dt_row in conn.execute(
+            "SELECT dt.document_id, t.name FROM document_tags dt JOIN tags t ON t.id=dt.tag_id"
+        ).fetchall():
+            doc_tags.setdefault(dt_row[0], []).append(dt_row[1])
+        conn.close()
+
+        filtered = []
+        for row in self._results:
+            did, orig, stored, etype, eid, desc, text = row
+            cat = (acc_cat if etype == "account" else con_cat).get(eid, "") or ""
+            tags = doc_tags.get(did, [])
+            if sel_cat != "(Alle)" and cat != sel_cat:
+                continue
+            if sel_tag != "(Alle)" and sel_tag not in tags:
+                continue
+            filtered.append(row)
+
+        self._tree.delete(*self._tree.get_children())
+        conn2 = sqlite3.connect(DB_PATH)
+        account_map  = {r[0]: r[1] for r in conn2.execute("SELECT id, bank_name FROM accounts")}
+        contract_map = {r[0]: r[1] for r in conn2.execute("SELECT id, name FROM contracts")}
+        conn2.close()
+        q = self._query.get().strip()
+        display = []
+        for row in filtered:
+            did, orig, stored, etype, eid, desc, text = row
+            label  = (account_map if etype == "account" else contract_map).get(eid, f"#{eid}")
+            rubrik = "Bankkonten" if etype == "account" else "Verträge & Vers."
+            preview = ""
+            if text and q:
+                idx = text.lower().find(q.lower())
+                if idx >= 0:
+                    start = max(0, idx - 40)
+                    end   = min(len(text), idx + len(q) + 40)
+                    snip  = text[start:end].replace("\n", " ").replace("\r", "")
+                    preview = ("…" if start > 0 else "") + snip + ("…" if end < len(text) else "")
+            display.append((did, orig, label, rubrik, desc or "", preview))
+        display.sort(key=lambda x: x[sort_idx].lower())
+        for item in display:
+            did, orig, label, rubrik, desc, preview = item
+            self._tree.insert("", "end", iid=str(did),
+                              values=(orig, label, rubrik, desc, preview))
+        self._status.set(f"{len(display)} Treffer angezeigt")
 
     def _clear(self):
         self._query.set("")
