@@ -1964,8 +1964,15 @@ class SearchTab(ttk.Frame):
         self.load()
 
     def load(self):
-        all_cats = get_all_categories()
-        self._cat_cb["values"] = ["(Alle)"] + [c[1] for c in all_cats]
+        # Kategorien aus tatsächlichen Datensätzen (nicht nur verwaltete Liste)
+        conn = sqlite3.connect(DB_PATH)
+        cats = set()
+        for row in conn.execute("SELECT DISTINCT category FROM accounts WHERE category IS NOT NULL AND category != ''"):
+            cats.add(row[0])
+        for row in conn.execute("SELECT DISTINCT category FROM contracts WHERE category IS NOT NULL AND category != ''"):
+            cats.add(row[0])
+        conn.close()
+        self._cat_cb["values"] = ["(Alle)"] + sorted(cats)
         all_tags = get_all_tags()
         self._tag_cb["values"] = ["(Alle)"] + [t[1] for t in all_tags]
 
@@ -2074,8 +2081,8 @@ class SearchTab(ttk.Frame):
         sort_idx = sort_map.get(sort_by, 1)
 
         conn = sqlite3.connect(DB_PATH)
-        acc_cat = {r[0]: r[9] for r in conn.execute(
-            "SELECT id,bank_name,account_number,login_url,username,password,balance,balance_date,notes,category FROM accounts").fetchall()}
+        acc_cat = {r[0]: r[1] for r in conn.execute(
+            "SELECT id, category FROM accounts").fetchall()}
         con_cat = {r[0]: r[1] for r in conn.execute("SELECT id,category FROM contracts").fetchall()}
         doc_tags = {}
         for dt_row in conn.execute(
