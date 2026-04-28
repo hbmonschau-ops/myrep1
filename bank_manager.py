@@ -665,6 +665,64 @@ def _build_pdf(doc, elements, data, col_widths, show_passwords):
 
 
 # ---------------------------------------------------------------------------
+# Tag-Selector widget
+# ---------------------------------------------------------------------------
+class TagSelector(ttk.Frame):
+    """Combobox + chip display for selecting multiple tags."""
+    def __init__(self, parent, all_tags: list, preselected_ids: list):
+        super().__init__(parent)
+        # all_tags: list of (id, name, color)
+        self._all_tags_map: dict[int, str] = {tid: tname for tid, tname, _ in all_tags}
+        self._selected: dict[int, str] = {}
+        for tid in preselected_ids:
+            if tid in self._all_tags_map:
+                self._selected[tid] = self._all_tags_map[tid]
+
+        cb_row = ttk.Frame(self)
+        cb_row.pack(fill=tk.X)
+        self._combo_var = tk.StringVar()
+        self._combo = ttk.Combobox(cb_row, textvariable=self._combo_var,
+                                   width=22, state="readonly")
+        self._combo.pack(side=tk.LEFT)
+        ttk.Button(cb_row, text="Hinzufügen", width=12,
+                   command=self._add).pack(side=tk.LEFT, padx=4)
+        self._chips = ttk.Frame(self)
+        self._chips.pack(fill=tk.X, pady=(4, 0))
+        self._refresh()
+
+    def _refresh(self):
+        available = [tname for tid, tname in self._all_tags_map.items()
+                     if tid not in self._selected]
+        self._combo["values"] = available
+        self._combo_var.set("")
+        for w in self._chips.winfo_children():
+            w.destroy()
+        for tid, tname in self._selected.items():
+            chip = ttk.Frame(self._chips, relief="solid", padding=(3, 1))
+            chip.pack(side=tk.LEFT, padx=2, pady=2)
+            ttk.Label(chip, text=tname).pack(side=tk.LEFT)
+            ttk.Button(chip, text="×", width=2,
+                       command=lambda t=tid: self._remove(t)).pack(side=tk.LEFT)
+
+    def _add(self):
+        tname = self._combo_var.get().strip()
+        if not tname:
+            return
+        for tid, tn in self._all_tags_map.items():
+            if tn == tname and tid not in self._selected:
+                self._selected[tid] = tn
+                self._refresh()
+                break
+
+    def _remove(self, tid: int):
+        self._selected.pop(tid, None)
+        self._refresh()
+
+    def get_selected_ids(self) -> list:
+        return list(self._selected.keys())
+
+
+# ---------------------------------------------------------------------------
 # Dialog-Basisklasse
 # ---------------------------------------------------------------------------
 class BaseDialog(tk.Toplevel):
@@ -730,16 +788,8 @@ class AccountDialog(BaseDialog):
         self._notes.insert("1.0", self._data.get("notes", ""))
         # Tags
         ttk.Label(frame, text="Tags", anchor="w").grid(row=8, column=0, sticky="nw", padx=10, pady=3)
-        tag_frame = ttk.Frame(frame)
-        tag_frame.grid(row=8, column=1, sticky="ew", padx=10, pady=3)
-        self._tag_vars: dict = {}
-        all_tags = get_all_tags()
-        preselected = set(self._data.get("tag_ids", []))
-        for i, (tid, tname, tcolor) in enumerate(all_tags):
-            var = tk.BooleanVar(value=(tid in preselected))
-            self._tag_vars[tid] = var
-            ttk.Checkbutton(tag_frame, text=tname, variable=var).grid(
-                row=i // 3, column=i % 3, sticky="w", padx=4)
+        self._tag_selector = TagSelector(frame, get_all_tags(), self._data.get("tag_ids", []))
+        self._tag_selector.grid(row=8, column=1, sticky="ew", padx=10, pady=3)
         btn = ttk.Frame(frame)
         btn.grid(row=9, column=0, columnspan=2, pady=(12, 0))
         ttk.Button(btn, text="Speichern",  command=self._save,   width=14).pack(side=tk.LEFT, padx=6)
@@ -765,7 +815,7 @@ class AccountDialog(BaseDialog):
             "balance":        balance,
             "balance_date":   self._vars["balance_date"].get().strip(),
             "notes":          self._notes.get("1.0", "end-1c").strip(),
-            "tag_ids":        [tid for tid, var in self._tag_vars.items() if var.get()],
+            "tag_ids":        self._tag_selector.get_selected_ids(),
         }
         self.destroy()
 
@@ -807,16 +857,8 @@ class ContractDialog(BaseDialog):
         self._notes.insert("1.0", self._data.get("notes", ""))
         # Tags
         ttk.Label(frame, text="Tags", anchor="w").grid(row=13, column=0, sticky="nw", padx=10, pady=3)
-        tag_frame = ttk.Frame(frame)
-        tag_frame.grid(row=13, column=1, sticky="ew", padx=10, pady=3)
-        self._tag_vars: dict = {}
-        all_tags = get_all_tags()
-        preselected = set(self._data.get("tag_ids", []))
-        for i, (tid, tname, tcolor) in enumerate(all_tags):
-            var = tk.BooleanVar(value=(tid in preselected))
-            self._tag_vars[tid] = var
-            ttk.Checkbutton(tag_frame, text=tname, variable=var).grid(
-                row=i // 3, column=i % 3, sticky="w", padx=4)
+        self._tag_selector = TagSelector(frame, get_all_tags(), self._data.get("tag_ids", []))
+        self._tag_selector.grid(row=13, column=1, sticky="ew", padx=10, pady=3)
         btn = ttk.Frame(frame)
         btn.grid(row=14, column=0, columnspan=2, pady=(12, 0))
         ttk.Button(btn, text="Speichern",  command=self._save,   width=14).pack(side=tk.LEFT, padx=6)
@@ -847,7 +889,7 @@ class ContractDialog(BaseDialog):
             "end_date":       self._vars["end_date"].get().strip(),
             "notice_period":  self._vars["notice_period"].get().strip(),
             "notes":          self._notes.get("1.0", "end-1c").strip(),
-            "tag_ids":        [tid for tid, var in self._tag_vars.items() if var.get()],
+            "tag_ids":        self._tag_selector.get_selected_ids(),
         }
         self.destroy()
 
