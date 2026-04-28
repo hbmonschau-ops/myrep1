@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bank Account Manager – Benutzerhandbuch</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;font-size:15px;color:#222;background:#fff;display:flex}
+nav{width:240px;min-height:100vh;background:#f0f4f8;border-right:1px solid #d0d8e4;padding:24px 0;position:sticky;top:0;height:100vh;overflow-y:auto;flex-shrink:0}
+nav h2{color:#1a3c5e;font-size:13px;text-transform:uppercase;letter-spacing:.07em;padding:0 18px 10px;border-bottom:1px solid #d0d8e4;margin-bottom:8px}
+nav a{display:block;padding:5px 18px;color:#1a3c5e;text-decoration:none;font-size:13px;line-height:1.5}
+nav a:hover{background:#dce6f0;color:#0d2a47}
+nav a.sub{padding-left:30px;color:#446}
+main{flex:1;padding:40px 60px;max-width:900px}
+h1{color:#1a3c5e;font-size:28px;margin-bottom:6px}
+.subtitle{color:#556;font-size:14px;margin-bottom:36px}
+h2{color:#1a3c5e;font-size:20px;margin:36px 0 12px;padding-bottom:6px;border-bottom:2px solid #1a3c5e}
+h3{color:#2a5080;font-size:16px;margin:20px 0 8px}
+p{margin:8px 0;line-height:1.65}
+ul,ol{margin:8px 0 8px 22px;line-height:1.8}
+li{margin:2px 0}
+code{background:#e8eef4;padding:1px 5px;border-radius:3px;font-family:Consolas,monospace;font-size:13px}
+pre{background:#1e1e1e;color:#d4d4d4;padding:14px 18px;border-radius:6px;overflow-x:auto;margin:10px 0;font-family:Consolas,monospace;font-size:13px;line-height:1.6}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+th{background:#1a3c5e;color:#fff;padding:8px 12px;text-align:left}
+td{padding:7px 12px;border-bottom:1px solid #dde3ea}
+tr:nth-child(even) td{background:#f5f7fa}
+.note{background:#e8f0fe;border-left:4px solid #1a73e8;padding:10px 14px;border-radius:0 6px 6px 0;margin:12px 0;font-size:14px}
+.warn{background:#fff3e0;border-left:4px solid #f57c00;padding:10px 14px;border-radius:0 6px 6px 0;margin:12px 0;font-size:14px}
+footer{margin-top:48px;padding-top:16px;border-top:1px solid #dde3ea;color:#888;font-size:13px}
+@media print{nav{display:none}main{padding:20px}body{display:block}}
+</style>
+</head>
+<body>
+<nav>
+  <h2>Inhalt</h2>
+  <a href="#s1">1. Einführung</a>
+  <a href="#s2">2. Systemvoraussetzungen</a>
+  <a href="#s3">3. Installation</a>
+  <a class="sub" href="#s3-1">3.1 Neuer PC (Installer)</a>
+  <a class="sub" href="#s3-2">3.2 Manuell</a>
+  <a class="sub" href="#s3-3">3.3 Update</a>
+  <a class="sub" href="#s3-4">3.4 Portabler Betrieb</a>
+  <a href="#s4">4. Erster Start &amp; Profile</a>
+  <a href="#s5">5. Benutzeroberfläche</a>
+  <a href="#s6">6. Bankkonten</a>
+  <a href="#s7">7. Verträge &amp; Versicherungen</a>
+  <a href="#s8">8. Dokumente</a>
+  <a href="#s9">9. Volltextsuche</a>
+  <a href="#s10">10. Tags &amp; Einstellungen</a>
+  <a href="#s11">11. Benutzerprofile</a>
+  <a href="#s12">12. Datensicherheit &amp; Backup</a>
+  <a href="#s13">13. Häufige Probleme</a>
+</nav>
+<main>
+<h1>Bank Account Manager</h1>
+<p class="subtitle">Benutzerhandbuch &ndash; Version 2026</p>
+
+<h2 id="s1">1. Einführung</h2>
+<p>Der <strong>Bank Account Manager</strong> ist eine lokale Windows-Anwendung zur übersichtlichen Verwaltung Ihrer Bankkonten, Verträge und Versicherungen. Alle Daten werden verschlüsselt auf Ihrem PC gespeichert &ndash; keine Cloud, keine externen Server.</p>
+<h3>Hauptfunktionen</h3>
+<ul>
+  <li>Bankkonten mit Login-Daten, Kontoständen und Notizen verwalten</li>
+  <li>Verträge und Versicherungen mit Laufzeiten und Zahlungsrhythmen verwalten</li>
+  <li>Dokumente (PDF, Word, Excel, Bilder) zu Einträgen hochladen</li>
+  <li>Volltextsuche in allen hochgeladenen Dokumenten</li>
+  <li>Mehrere Benutzerprofile (z.&nbsp;B. für verschiedene Personen im Haushalt)</li>
+  <li>Tags zum Kategorisieren und Filtern von Einträgen</li>
+  <li>PDF-Export von Einträgen (einzeln oder als Auswahl)</li>
+  <li>Verschlüsselte Speicherung aller Passwörter (AES-256)</li>
+</ul>
+
+<h2 id="s2">2. Systemvoraussetzungen</h2>
+<table>
+  <tr><th>Anforderung</th><th>Details</th></tr>
+  <tr><td>Betriebssystem</td><td>Windows 10 oder neuer (64-Bit)</td></tr>
+  <tr><td>Python</td><td>Version 3.10 oder neuer (wird vom Installer automatisch installiert)</td></tr>
+  <tr><td>Internetverbindung</td><td>Nur für Installation und Updates erforderlich</td></tr>
+  <tr><td>Speicherplatz</td><td>Ca. 300 MB (inkl. Python und Pakete)</td></tr>
+</table>
+
+<h2 id="s3">3. Installation</h2>
+
+<h3 id="s3-1">3.1 Neue Installation &ndash; empfohlener Weg (Installer)</h3>
+<ol>
+  <li>PowerShell öffnen: Windows-Taste &rarr; <code>PowerShell</code> eingeben &rarr; Enter</li>
+  <li>Ausführungsrichtlinie einmalig erlauben (einmalig, einmalig!):
+    <pre>Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned</pre>
+  </li>
+  <li>Installer herunterladen:
+    <pre>curl.exe -L "https://raw.githubusercontent.com/hbmonschau-ops/myrep1/claude/bank-account-manager-app-1Me0D/Install-BankManager.ps1" -o Install-BankManager.ps1</pre>
+  </li>
+  <li>Installer starten:
+    <pre>.\Install-BankManager.ps1</pre>
+  </li>
+  <li>Den Anweisungen folgen:
+    <ul>
+      <li>Installationsordner bestätigen (Standard: <code>Desktop\BankManager</code>)</li>
+      <li>Python wird automatisch installiert, falls nicht vorhanden</li>
+      <li>Alle benötigten Pakete werden automatisch installiert</li>
+    </ul>
+  </li>
+  <li>Nach Abschluss: Desktop-Verknüpfung <strong>„Bank Manager"</strong> doppelklicken</li>
+</ol>
+<div class="note">Der Installer benötigt keine Administratorrechte. Python wird nur für den aktuellen Benutzer installiert.</div>
+
+<h3 id="s3-2">3.2 Manuelle Installation</h3>
+<pre>mkdir C:\Users\$env:USERNAME\Desktop\BankManager
+cd C:\Users\$env:USERNAME\Desktop\BankManager
+curl.exe -L "https://raw.githubusercontent.com/hbmonschau-ops/myrep1/claude/bank-account-manager-app-1Me0D/bank_manager.py" -o bank_manager.pyw
+pip install cryptography reportlab pdfplumber python-docx openpyxl</pre>
+<p>Danach <code>bank_manager.pyw</code> per Doppelklick starten.</p>
+
+<h3 id="s3-3">3.3 Vorhandene Installation aktualisieren</h3>
+<p>Nur die App-Datei wird ersetzt &ndash; alle Daten bleiben erhalten:</p>
+<pre>cd C:\Users\$env:USERNAME\Desktop\BankManager
+curl.exe -L "https://raw.githubusercontent.com/hbmonschau-ops/myrep1/claude/bank-account-manager-app-1Me0D/bank_manager.py" -o bank_manager.pyw</pre>
+
+<h3 id="s3-4">3.4 Portabler Betrieb (USB-Stick)</h3>
+<p>Legen Sie einmalig einen Ordner <code>profiles</code> neben die <code>bank_manager.pyw</code>:</p>
+<pre>mkdir C:\Users\$env:USERNAME\Desktop\BankManager\profiles</pre>
+<p>Ab sofort speichert die App alle Daten in diesem Ordner &ndash; ideal für den USB-Stick-Betrieb. Beim Update bleibt der <code>profiles</code>-Ordner unangetastet.</p>
+<h2 id="s4">4. Erster Start &amp; Profile</h2>
+<h3>Beim allerersten Start</h3>
+<p>Es wird ein Profilname abgefragt. Der Standardname lautet <strong>„Standard"</strong>. Einfach Enter drücken oder einen eigenen Namen eingeben. Das Profil wird angelegt und die App startet direkt.</p>
+<h3>Profil-Auswahl-Dialog</h3>
+<p>Bei jedem weiteren Start erscheint der Profil-Auswahl-Dialog. Hier können Sie:</p>
+<ul>
+  <li><strong>Öffnen:</strong> Doppelklick auf ein Profil oder Schaltfläche „Öffnen"</li>
+  <li><strong>Neu anlegen:</strong> Schaltfläche „Neu" &rarr; Profilname eingeben</li>
+  <li><strong>Umbenennen:</strong> Profil markieren &rarr; „Umbenennen"</li>
+  <li><strong>Löschen:</strong> Profil markieren &rarr; „Löschen" (nur wenn mehr als ein Profil vorhanden)</li>
+</ul>
+<div class="note">Jedes Profil hat eine vollständig getrennte Datenbank, eigene Dokumente und einen eigenen Verschlüsselungsschlüssel. Die Daten verschiedener Profile sind voneinander isoliert.</div>
+
+<h2 id="s5">5. Benutzeroberfläche</h2>
+<p>Die Oberfläche gliedert sich in drei Bereiche:</p>
+<ul>
+  <li><strong>Topbar (oben):</strong> Zeigt das aktive Profil und die Schaltfläche „Profil wechseln"</li>
+  <li><strong>Tabs:</strong> Bankkonten &bull; Verträge &amp; Vers. &bull; Suche &bull; Einstellungen</li>
+  <li><strong>Tab-Inhalt:</strong> Suchzeile oben &rarr; Datengrid (Einträge) &rarr; Dokumentenbereich unten</li>
+</ul>
+<p>Das Datengrid lässt sich horizontal und vertikal scrollen, falls die Tabelle breiter als das Fenster ist.</p>
+
+<h2 id="s6">6. Bankkonten</h2>
+<h3>6.1 Konto anlegen</h3>
+<ol>
+  <li>Schaltfläche <strong>„Neu"</strong> klicken</li>
+  <li>Formular ausfüllen:
+    <ul>
+      <li><strong>Bankname</strong> (Pflichtfeld)</li>
+      <li>Kontonummer, Login-URL, Benutzername, Passwort (optional)</li>
+      <li>Kontostand und Stand-Datum (Format TT.MM.JJJJ)</li>
+      <li>Notizen</li>
+      <li>Tags: Tag aus Dropdown wählen &rarr; „Hinzufügen" klicken (mehrere möglich)</li>
+    </ul>
+  </li>
+  <li><strong>„Speichern"</strong> klicken</li>
+</ol>
+<h3>6.2 Konto bearbeiten</h3>
+<p>Eintrag im Grid markieren &rarr; Schaltfläche <strong>„Bearbeiten"</strong> oder <strong>Doppelklick</strong> auf den Eintrag.</p>
+<h3>6.3 Konto löschen</h3>
+<p>Eintrag markieren &rarr; <strong>„Löschen"</strong> &rarr; Sicherheitsabfrage bestätigen.</p>
+<div class="warn">Das Löschen eines Eintrags entfernt auch alle zugehörigen Dokumente unwiderruflich.</div>
+<h3>6.4 Suchen und Filtern</h3>
+<ul>
+  <li><strong>Suchfeld:</strong> Filtert nach Bankname, Kontonummer und Benutzername (Echtzeit)</li>
+  <li><strong>Tag-Filter:</strong> Combobox neben dem Suchfeld &rarr; nur Einträge mit dem gewählten Tag werden angezeigt</li>
+  <li><strong>Zurücksetzen:</strong> Suchfeld leeren oder Tag-Filter auf „(Alle)" setzen</li>
+</ul>
+<h3>6.5 Mehrfachauswahl und PDF-Export</h3>
+<ul>
+  <li><strong>Ctrl+Klick:</strong> Einzelne Einträge zur Auswahl hinzufügen</li>
+  <li><strong>Shift+Klick:</strong> Bereich von Einträgen auswählen</li>
+  <li><strong>„PDF Export":</strong> Exportiert alle markierten Einträge. Wenn nichts markiert ist, werden alle sichtbaren Einträge exportiert.</li>
+</ul>
+
+<h2 id="s7">7. Verträge &amp; Versicherungen</h2>
+<h3>7.1 Vertrag anlegen</h3>
+<ol>
+  <li>Tab <strong>„Verträge &amp; Vers."</strong> öffnen &rarr; <strong>„Neu"</strong> klicken</li>
+  <li>Formular ausfüllen:
+    <ul>
+      <li><strong>Bezeichnung</strong> (Pflichtfeld), Kategorie (z.&nbsp;B. Versicherung, Abonnement)</li>
+      <li>Anbieter, Vertragsnummer</li>
+      <li>Login-Daten (optional, verschlüsselt gespeichert)</li>
+      <li>Betrag und Zahlungsrhythmus (monatlich / vierteljährlich / halbjährlich / jährlich)</li>
+      <li>Vertragsbeginn, Vertragsende (TT.MM.JJJJ), Kündigungsfrist</li>
+      <li>Notizen und Tags</li>
+    </ul>
+  </li>
+  <li><strong>„Speichern"</strong> klicken</li>
+</ol>
+<p>Bearbeiten, Löschen, Filtern und Export funktionieren identisch wie bei Bankkonten (Abschnitt 6.2–6.5).</p>
+<h2 id="s8">8. Dokumentenverwaltung</h2>
+<h3>8.1 Dokument hochladen</h3>
+<ol>
+  <li>Im Tab „Bankkonten" oder „Verträge &amp; Vers." den gewünschten Eintrag im Grid markieren</li>
+  <li>Im unteren <strong>Dokumentenbereich</strong> auf <strong>„Datei hinzufügen"</strong> klicken</li>
+  <li>Datei auswählen &rarr; optionale Beschreibung eingeben &rarr; <strong>OK</strong></li>
+</ol>
+<p>Die Datei wird in den Dokumentenordner des Profils kopiert. Bei unterstützten Formaten wird der Text automatisch extrahiert und für die Volltextsuche gespeichert.</p>
+<h3>8.2 Unterstützte Dateiformate</h3>
+<table>
+  <tr><th>Format</th><th>Dateiendungen</th><th>Volltextsuche</th></tr>
+  <tr><td>PDF</td><td>.pdf</td><td>Ja (benötigt pdfplumber)</td></tr>
+  <tr><td>Word</td><td>.docx</td><td>Ja (benötigt python-docx)</td></tr>
+  <tr><td>Excel</td><td>.xlsx, .xls</td><td>Ja (benötigt openpyxl)</td></tr>
+  <tr><td>Textdateien</td><td>.txt .csv .md .json .html .xml</td><td>Ja</td></tr>
+  <tr><td>Bilder &amp; Sonstiges</td><td>.jpg .png .gif usw.</td><td>Nein</td></tr>
+</table>
+<div class="note">PDFs, die nur eingescannte Bilder enthalten (ohne Textschicht), können nicht durchsucht werden. Nur PDFs mit eingebettetem Text werden indiziert.</div>
+<h3>8.3 Dokument öffnen</h3>
+<p><strong>Doppelklick</strong> auf ein Dokument im Dokumentenbereich &rarr; öffnet das Dokument mit der Standard-Anwendung des Systems (z.&nbsp;B. Adobe Reader für PDF, Word für DOCX).</p>
+<h3>8.4 Dokument löschen</h3>
+<p>Dokument im Dokumentenbereich markieren &rarr; <strong>„Löschen"</strong> &rarr; Bestätigung. Die Datei wird aus dem Dokumentenordner entfernt.</p>
+
+<h2 id="s9">9. Volltextsuche</h2>
+<h3>9.1 Suche durchführen</h3>
+<ol>
+  <li>Tab <strong>„Suche"</strong> öffnen</li>
+  <li>Suchbegriff eingeben (mindestens 2 Zeichen) &rarr; <strong>Enter</strong></li>
+  <li>Die Ergebnistabelle zeigt:
+    <ul>
+      <li><strong>Dateiname</strong> – der Name der gefundenen Datei</li>
+      <li><strong>Eintrag</strong> – zugehöriges Konto oder Vertrag</li>
+      <li><strong>Rubrik</strong> – Bankkonten oder Verträge &amp; Vers.</li>
+      <li><strong>Beschreibung</strong> – optionale Beschreibung des Dokuments</li>
+      <li><strong>Fundstelle</strong> – Textauszug mit dem gefundenen Begriff im Kontext</li>
+    </ul>
+  </li>
+  <li><strong>Doppelklick</strong> auf ein Ergebnis öffnet das Dokument</li>
+</ol>
+<div class="note">Die Suche ist nicht case-sensitiv – „Rechtsschutz" findet auch „rechtsschutz" und „RECHTSSCHUTZ".</div>
+<h3>9.2 Dokumente neu indizieren</h3>
+<p>Falls die Suche keine Ergebnisse liefert, obwohl Dokumente vorhanden sind:</p>
+<ul>
+  <li>Schaltfläche <strong>„Alle neu indizieren"</strong> klicken</li>
+  <li>Die App extrahiert den Text aller vorhandenen Dokumente neu</li>
+  <li>Etwaige Fehler werden angezeigt (z.&nbsp;B. fehlende Bibliothek, Bild-PDF)</li>
+</ul>
+<p>Die Statuszeile unten zeigt an, wie viele Dokumente noch nicht indiziert sind, wenn die Suche 0 Treffer ergibt.</p>
+
+<h2 id="s10">10. Tags &amp; Einstellungen</h2>
+<h3>10.1 Tag anlegen</h3>
+<ol>
+  <li>Tab <strong>„Einstellungen"</strong> öffnen</li>
+  <li>Schaltfläche <strong>„Neu"</strong> klicken &rarr; Tagname eingeben &rarr; OK</li>
+</ol>
+<h3>10.2 Tag umbenennen oder löschen</h3>
+<p>Tag in der Liste markieren &rarr; <strong>„Umbenennen"</strong> oder <strong>„Löschen"</strong>.</p>
+<div class="warn">Beim Löschen eines Tags werden alle Zuordnungen zu Konten und Verträgen automatisch entfernt.</div>
+<h3>10.3 Tag einem Eintrag zuweisen</h3>
+<ol>
+  <li>Beim Anlegen oder Bearbeiten eines Eintrags das Feld <strong>„Tags"</strong> verwenden</li>
+  <li>Gewünschten Tag aus dem Dropdown-Menü wählen</li>
+  <li><strong>„Hinzufügen"</strong> klicken – der Tag erscheint als Chip mit „×"-Button</li>
+  <li>Zum Entfernen: auf das <strong>„×"</strong> im Chip klicken</li>
+  <li>Mehrere Tags pro Eintrag möglich</li>
+</ol>
+<h3>10.4 Nach Tags filtern</h3>
+<p>In den Tabs „Bankkonten" und „Verträge &amp; Vers." gibt es neben dem Suchfeld eine <strong>Tag-Filter-Combobox</strong>. Wählen Sie einen Tag aus, um nur die Einträge mit diesem Tag anzuzeigen.</p>
+<h2 id="s11">11. Benutzerprofile</h2>
+<h3>11.1 Neues Profil anlegen</h3>
+<p>Im Profil-Auswahl-Dialog (erscheint beim Start): <strong>„Neu"</strong> &rarr; Profilnamen eingeben &rarr; OK.</p>
+<h3>11.2 Profil wechseln</h3>
+<p>In der laufenden App: Schaltfläche <strong>„Profil wechseln"</strong> in der Topbar klicken. Die App startet neu und zeigt den Profil-Auswahl-Dialog.</p>
+<h3>11.3 Profil umbenennen oder löschen</h3>
+<p>Im Profil-Auswahl-Dialog das Profil markieren &rarr; <strong>„Umbenennen"</strong> oder <strong>„Löschen"</strong>.</p>
+<div class="note">Das letzte verbleibende Profil kann nicht gelöscht werden.</div>
+<h3>11.4 Datenisolierung</h3>
+<p>Jedes Profil ist vollständig isoliert:</p>
+<ul>
+  <li>Eigene Datenbank (<code>bankaccounts.db</code>)</li>
+  <li>Eigener Dokumentenordner (<code>documents\</code>)</li>
+  <li>Eigener Verschlüsselungsschlüssel (<code>key.bin</code>)</li>
+</ul>
+
+<h2 id="s12">12. Datensicherheit &amp; Backup</h2>
+<h3>12.1 Verschlüsselung</h3>
+<p>Alle Passwörter werden mit <strong>AES-256 (Fernet)</strong> verschlüsselt gespeichert. Der Schlüssel wird beim ersten Start automatisch erzeugt und lokal gespeichert (<code>key.bin</code>).</p>
+<h3>12.2 Datenpfade</h3>
+<p><strong>Standard-Modus</strong> (Daten im Windows-Benutzerprofil):</p>
+<table>
+  <tr><th>Pfad</th><th>Inhalt</th></tr>
+  <tr><td><code>%APPDATA%\BankAccountManager\profiles.json</code></td><td>Profilliste</td></tr>
+  <tr><td><code>%APPDATA%\BankAccountManager\profiles\{Name}\bankaccounts.db</code></td><td>Datenbank</td></tr>
+  <tr><td><code>%APPDATA%\BankAccountManager\profiles\{Name}\documents\</code></td><td>Hochgeladene Dokumente</td></tr>
+  <tr><td><code>%APPDATA%\BankAccountManager\profiles\{Name}\key.bin</code></td><td>Verschlüsselungsschlüssel</td></tr>
+</table>
+<p><strong>Portabler Modus:</strong> Alle Daten liegen im Ordner der <code>bank_manager.pyw</code>.</p>
+<h3>12.3 Backup-Empfehlung</h3>
+<p>Sichern Sie regelmäßig den gesamten Profilordner:</p>
+<pre>%APPDATA%\BankAccountManager\profiles\{Profilname}\</pre>
+<div class="warn">Wichtig: <code>key.bin</code> und <code>bankaccounts.db</code> müssen immer zusammen gesichert werden. Ohne den passenden Schlüssel können Passwörter nicht entschlüsselt werden.</div>
+
+<h2 id="s13">13. Häufige Probleme</h2>
+<table>
+  <tr><th>Problem</th><th>Ursache</th><th>Lösung</th></tr>
+  <tr>
+    <td>Volltextsuche findet nichts</td>
+    <td>Dokumente noch nicht indiziert</td>
+    <td>Im Tab „Suche": <strong>„Alle neu indizieren"</strong> klicken</td>
+  </tr>
+  <tr>
+    <td>„pdfplumber nicht installiert"</td>
+    <td>Paket fehlt</td>
+    <td><code>pip install pdfplumber</code>, danach neu indizieren</td>
+  </tr>
+  <tr>
+    <td>PDF wird nicht durchsucht</td>
+    <td>PDF enthält nur Bilder (gescannt)</td>
+    <td>Kein Text extrahierbar – kein Lösungsweg ohne OCR</td>
+  </tr>
+  <tr>
+    <td>Datei landet in <code>C:\Windows\system32</code></td>
+    <td>curl ohne vorheriges <code>cd</code> aufgerufen</td>
+    <td>Zuerst mit <code>cd C:\Users\...\Desktop\BankManager</code> in den Zielordner wechseln</td>
+  </tr>
+  <tr>
+    <td>curl-Fehler „Parameter L nicht gefunden"</td>
+    <td>PowerShell-Alias statt echtem curl</td>
+    <td><code>curl.exe</code> (mit .exe) statt <code>curl</code> verwenden</td>
+  </tr>
+  <tr>
+    <td>Passwort wird nicht angezeigt / falsch</td>
+    <td>Falsches Profil oder key.bin fehlt</td>
+    <td>Richtiges Profil öffnen; key.bin aus Backup wiederherstellen</td>
+  </tr>
+  <tr>
+    <td>App startet nicht</td>
+    <td>Python nicht installiert oder Paket fehlt</td>
+    <td>Installer erneut ausführen oder <code>pip install ...</code> manuell</td>
+  </tr>
+  <tr>
+    <td>Skript-Ausführung verweigert</td>
+    <td>PowerShell-Ausführungsrichtlinie</td>
+    <td><code>Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned</code></td>
+  </tr>
+</table>
+
+<footer>
+  Bank Account Manager &ndash; Benutzerhandbuch &bull; Zuletzt aktualisiert: April 2026
+</footer>
+</main>
+</body>
+</html>
