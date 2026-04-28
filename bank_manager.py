@@ -1979,7 +1979,6 @@ class SearchTab(ttk.Frame):
         e = ttk.Entry(sf, textvariable=self._query, width=42, font=("Segoe UI", 10))
         e.pack(side=tk.LEFT, padx=8)
         e.bind("<Return>", lambda _: self._search())
-        ttk.Button(sf, text="Suchen",    command=self._search, width=10).pack(side=tk.LEFT)
         ttk.Button(sf, text="✕", width=3,
                    command=self._clear).pack(side=tk.LEFT, padx=4)
         tk.Frame(sf, width=1, bg="#ccc").pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
@@ -1992,17 +1991,18 @@ class SearchTab(ttk.Frame):
         self._cat_filter = tk.StringVar(value="(Alle)")
         self._cat_cb = ttk.Combobox(ff, textvariable=self._cat_filter, width=16, state="readonly")
         self._cat_cb.pack(side=tk.LEFT, padx=(4, 12))
-        self._cat_cb.bind("<<ComboboxSelected>>", lambda _: self._apply_filters())
+        self._cat_cb.bind("<<ComboboxSelected>>", lambda _: self._search())
         ttk.Label(ff, text="Tag:").pack(side=tk.LEFT)
         self._tag_filter = tk.StringVar(value="(Alle)")
         self._tag_cb = ttk.Combobox(ff, textvariable=self._tag_filter, width=16, state="readonly")
         self._tag_cb.pack(side=tk.LEFT, padx=4)
-        self._tag_cb.bind("<<ComboboxSelected>>", lambda _: self._apply_filters())
+        self._tag_cb.bind("<<ComboboxSelected>>", lambda _: self._search())
         ttk.Label(ff, text="Sortieren nach:").pack(side=tk.LEFT, padx=(12, 0))
         self._sort_col = tk.StringVar(value="Dateiname")
         ttk.Combobox(ff, textvariable=self._sort_col, width=14, state="readonly",
                      values=["Dateiname", "Eintrag", "Rubrik"]).pack(side=tk.LEFT, padx=4)
         self._sort_col.trace_add("write", lambda *_: self._apply_filters())
+        ttk.Button(ff, text="Suchen", command=self._search, width=10).pack(side=tk.LEFT, padx=(12, 0))
 
         self._info = tk.StringVar(value="Suchbegriff eingeben und Enter drücken.")
         ttk.Label(self, textvariable=self._info, padding=(12, 2),
@@ -2038,9 +2038,8 @@ class SearchTab(ttk.Frame):
 
     def _search(self):
         q = self._query.get().strip()
-        sel_cat = self._cat_filter.get()
-        sel_tag = self._tag_filter.get()
-        has_filter = sel_cat != "(Alle)" or sel_tag != "(Alle)"
+        has_filter = (self._cat_filter.get() != "(Alle)" or
+                      self._tag_filter.get() != "(Alle)")
         if len(q) < 2 and not has_filter:
             messagebox.showinfo("Hinweis",
                 "Bitte mindestens 2 Zeichen eingeben oder\neine Kategorie / einen Tag auswählen.",
@@ -2059,42 +2058,11 @@ class SearchTab(ttk.Frame):
                 "SELECT d.id, d.original_name, d.stored_name, d.entity_type, d.entity_id, "
                 "d.description, d.text_content FROM documents d"
             ).fetchall()
-        account_map  = {r[0]: r[1] for r in conn.execute("SELECT id, bank_name FROM accounts")}
-        contract_map = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM contracts")}
         conn.close()
-
         self.load()
-
         self._results = rows
-        self._tree.delete(*self._tree.get_children())
-        for row in rows:
-            did, orig, stored, etype, eid, desc, text = row
-            label  = (account_map if etype == "account" else contract_map).get(eid, f"#{eid}")
-            rubrik = "Bankkonten" if etype == "account" else "Verträge & Vers."
-            preview = ""
-            if text:
-                idx = text.lower().find(q.lower())
-                if idx >= 0:
-                    start = max(0, idx - 40)
-                    end   = min(len(text), idx + len(q) + 40)
-                    snip  = text[start:end].replace("\n", " ").replace("\r", "")
-                    preview = ("…" if start > 0 else "") + snip + ("…" if end < len(text) else "")
-            self._tree.insert("", "end", iid=str(did),
-                              values=(orig, label, rubrik, desc or "", preview))
-        n = len(rows)
-        self._info.set(f"{n} Dokument{'e' if n != 1 else ''} gefunden für: '{q}'")
-        if n == 0:
-            conn2 = sqlite3.connect(DB_PATH)
-            unindexed = conn2.execute(
-                "SELECT COUNT(*) FROM documents WHERE text_content IS NULL OR text_content = ''"
-            ).fetchone()[0]
-            conn2.close()
-            hint = ""
-            if unindexed:
-                hint = f"  ·  {unindexed} Dokument(e) noch nicht indiziert → 'Alle neu indizieren' klicken"
-            self._status.set(f"Keine Treffer.{hint}")
-        else:
-            self._status.set(f"Suche abgeschlossen  –  {n} Treffer")
+        self._info.set(f"{len(rows)} Dokument{'e' if len(rows) != 1 else ''} als Basis geladen.")
+        self._apply_filters()
 
     def _apply_filters(self):
         if not self._results:
@@ -2152,7 +2120,17 @@ class SearchTab(ttk.Frame):
             did, orig, label, rubrik, desc, preview = item
             self._tree.insert("", "end", iid=str(did),
                               values=(orig, label, rubrik, desc, preview))
-        self._status.set(f"{len(display)} Treffer angezeigt")
+        n = len(display)
+        if n == 0:
+            conn3 = sqlite3.connect(DB_PATH)
+            unindexed = conn3.execute(
+                "SELECT COUNT(*) FROM documents WHERE text_content IS NULL OR text_content = ''"
+            ).fetchone()[0]
+            conn3.close()
+            hint = f"  ·  {unindexed} Dok. nicht indiziert → 'Alle neu indizieren'" if unindexed else ""
+            self._status.set(f"Keine Treffer.{hint}")
+        else:
+            self._status.set(f"{n} Treffer")
 
     def _clear(self):
         self._query.set("")
