@@ -2038,16 +2038,27 @@ class SearchTab(ttk.Frame):
 
     def _search(self):
         q = self._query.get().strip()
-        if len(q) < 2:
-            messagebox.showinfo("Hinweis", "Bitte mindestens 2 Zeichen eingeben.", parent=self)
+        sel_cat = self._cat_filter.get()
+        sel_tag = self._tag_filter.get()
+        has_filter = sel_cat != "(Alle)" or sel_tag != "(Alle)"
+        if len(q) < 2 and not has_filter:
+            messagebox.showinfo("Hinweis",
+                "Bitte mindestens 2 Zeichen eingeben oder\neine Kategorie / einen Tag auswählen.",
+                parent=self)
             return
         conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute(
-            "SELECT d.id, d.original_name, d.stored_name, d.entity_type, d.entity_id, "
-            "d.description, d.text_content FROM documents d "
-            "WHERE d.text_content LIKE ? COLLATE NOCASE",
-            (f"%{q}%",)
-        ).fetchall()
+        if len(q) >= 2:
+            rows = conn.execute(
+                "SELECT d.id, d.original_name, d.stored_name, d.entity_type, d.entity_id, "
+                "d.description, d.text_content FROM documents d "
+                "WHERE d.text_content LIKE ? COLLATE NOCASE",
+                (f"%{q}%",)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT d.id, d.original_name, d.stored_name, d.entity_type, d.entity_id, "
+                "d.description, d.text_content FROM documents d"
+            ).fetchall()
         account_map  = {r[0]: r[1] for r in conn.execute("SELECT id, bank_name FROM accounts")}
         contract_map = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM contracts")}
         conn.close()
