@@ -164,7 +164,7 @@ def init_db():
             created_at      TEXT DEFAULT (datetime('now','localtime'))
         )
     """)
-    for col in ("account_number",):
+    for col in ("account_number", "category"):
         try:
             conn.execute(f"ALTER TABLE accounts ADD COLUMN {col} TEXT")
         except sqlite3.OperationalError:
@@ -241,6 +241,14 @@ def init_db():
         )
     """)
 
+    # --- Kategorie-Verwaltung ---
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS categories (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE
+        )
+    """)
+
     # --- Verknüpfung Contract ↔ Tags ---
     conn.execute("""
         CREATE TABLE IF NOT EXISTS contract_tags (
@@ -260,22 +268,22 @@ def init_db():
 def get_all_accounts():
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        "SELECT id, bank_name, account_number, login_url, username, "
-        "password, balance, balance_date, notes FROM accounts ORDER BY bank_name"
+        "SELECT id,bank_name,account_number,login_url,username,password,balance,balance_date,notes,category "
+        "FROM accounts ORDER BY bank_name"
     ).fetchall()
     conn.close()
     return rows
 
 
 def insert_account(bank_name, account_number, login_url, username,
-                   password, balance, balance_date, notes):
+                   password, balance, balance_date, notes, category=""):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.execute(
         "INSERT INTO accounts (bank_name,account_number,login_url,username,"
-        "password,balance,balance_date,notes) VALUES (?,?,?,?,?,?,?,?)",
+        "password,balance,balance_date,notes,category) VALUES (?,?,?,?,?,?,?,?,?)",
         (bank_name, account_number, login_url, username,
          encrypt(password) if password else "",
-         balance, balance_date, notes)
+         balance, balance_date, notes, category)
     )
     conn.commit()
     new_id = cur.lastrowid
@@ -284,14 +292,14 @@ def insert_account(bank_name, account_number, login_url, username,
 
 
 def update_account(aid, bank_name, account_number, login_url, username,
-                   password, balance, balance_date, notes):
+                   password, balance, balance_date, notes, category=""):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "UPDATE accounts SET bank_name=?,account_number=?,login_url=?,username=?,"
-        "password=?,balance=?,balance_date=?,notes=? WHERE id=?",
+        "password=?,balance=?,balance_date=?,notes=?,category=? WHERE id=?",
         (bank_name, account_number, login_url, username,
          encrypt(password) if password else "",
-         balance, balance_date, notes, aid)
+         balance, balance_date, notes, category, aid)
     )
     conn.commit()
     conn.close()
@@ -464,6 +472,36 @@ def reindex_all_documents() -> tuple[int, list[str]]:
     conn.commit()
     conn.close()
     return success, errors
+
+
+def get_all_categories() -> list:
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT id, name FROM categories ORDER BY name").fetchall()
+    conn.close()
+    return rows
+
+
+def insert_category(name: str) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+    cid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return cid
+
+
+def update_category(cid: int, name: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE categories SET name=? WHERE id=?", (name, cid))
+    conn.commit()
+    conn.close()
+
+
+def delete_category(cid: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM categories WHERE id=?", (cid,))
+    conn.commit()
+    conn.close()
 
 
 # --- Tags CRUD ---
@@ -822,16 +860,21 @@ class AccountDialog(BaseDialog):
         self._add_field(frame, 4, "Passwort",                     "password", is_pw=True)
         self._add_field(frame, 5, "Kontostand (€)",               "balance")
         self._add_field(frame, 6, "Stand-Datum (TT.MM.JJJJ)",    "balance_date")
-        ttk.Label(frame, text="Notizen", anchor="w").grid(row=7, column=0, sticky="nw", padx=10, pady=3)
+        ttk.Label(frame, text="Kategorie", anchor="w").grid(row=7, column=0, sticky="w", padx=10, pady=3)
+        cats = [""] + [c[1] for c in get_all_categories()]
+        self._cat_var = tk.StringVar(value=self._data.get("category", ""))
+        ttk.Combobox(frame, textvariable=self._cat_var, values=cats,
+                     width=33).grid(row=7, column=1, sticky="ew", padx=10, pady=3)
+        ttk.Label(frame, text="Notizen", anchor="w").grid(row=8, column=0, sticky="nw", padx=10, pady=3)
         self._notes = tk.Text(frame, width=34, height=3, font=("Segoe UI", 9))
-        self._notes.grid(row=7, column=1, sticky="ew", padx=10, pady=3)
+        self._notes.grid(row=8, column=1, sticky="ew", padx=10, pady=3)
         self._notes.insert("1.0", self._data.get("notes", ""))
         # Tags
-        ttk.Label(frame, text="Tags", anchor="w").grid(row=8, column=0, sticky="nw", padx=10, pady=3)
+        ttk.Label(frame, text="Tags", anchor="w").grid(row=9, column=0, sticky="nw", padx=10, pady=3)
         self._tag_selector = TagSelector(frame, get_all_tags(), self._data.get("tag_ids", []))
-        self._tag_selector.grid(row=8, column=1, sticky="ew", padx=10, pady=3)
+        self._tag_selector.grid(row=9, column=1, sticky="ew", padx=10, pady=3)
         btn = ttk.Frame(frame)
-        btn.grid(row=9, column=0, columnspan=2, pady=(12, 0))
+        btn.grid(row=10, column=0, columnspan=2, pady=(12, 0))
         ttk.Button(btn, text="Speichern",  command=self._save,   width=14).pack(side=tk.LEFT, padx=6)
         ttk.Button(btn, text="Abbrechen",  command=self.destroy, width=14).pack(side=tk.LEFT, padx=6)
         first.focus()
@@ -856,6 +899,7 @@ class AccountDialog(BaseDialog):
             "balance_date":   self._vars["balance_date"].get().strip(),
             "notes":          self._notes.get("1.0", "end-1c").strip(),
             "tag_ids":        self._tag_selector.get_selected_ids(),
+            "category":       self._cat_var.get().strip(),
         }
         self.destroy()
 
@@ -879,7 +923,8 @@ class ContractDialog(BaseDialog):
     def _build_ui(self):
         frame = ttk.Frame(self, padding=16)
         frame.pack(fill=tk.BOTH, expand=True)
-        self._add_combo(frame, 0, "Kategorie",                  "category",      CATEGORIES)
+        cats = [""] + [c[1] for c in get_all_categories()]
+        self._add_combo(frame, 0, "Kategorie", "category", cats)
         first = self._add_field(frame, 1, "Bezeichnung *",      "name")
         self._add_field(frame, 2, "Anbieter",                   "provider")
         self._add_field(frame, 3, "Vertragsnummer",             "contract_number")
@@ -1266,13 +1311,13 @@ def toolbar_btn(parent, text, command):
 # Tab: Bankkonten
 # ---------------------------------------------------------------------------
 class AccountsTab(ttk.Frame):
-    COLUMNS    = ("bank_name","account_number","login_url","username","balance","balance_date","tags","notes")
-    COL_LABELS = {"bank_name":"Bank","account_number":"Kontonummer","login_url":"Login-URL",
+    COLUMNS    = ("category","bank_name","account_number","login_url","username","balance","balance_date","tags","notes")
+    COL_LABELS = {"category":"Kategorie","bank_name":"Bank","account_number":"Kontonummer","login_url":"Login-URL",
                   "username":"Benutzername","balance":"Kontostand","balance_date":"Stand-Datum",
                   "tags":"Tags","notes":"Notizen"}
-    COL_WIDTHS = {"bank_name":150,"account_number":120,"login_url":190,
+    COL_WIDTHS = {"category":110,"bank_name":140,"account_number":120,"login_url":180,
                   "username":130,"balance":100,"balance_date":90,"tags":140,"notes":180}
-    DB_IDX     = {"bank_name":1,"account_number":2,"login_url":3,
+    DB_IDX     = {"category":9,"bank_name":1,"account_number":2,"login_url":3,
                   "username":4,"balance":6,"balance_date":7}
 
     def __init__(self, parent):
@@ -1302,10 +1347,14 @@ class AccountsTab(ttk.Frame):
         ttk.Entry(sf, textvariable=self._search, width=28).pack(side=tk.LEFT, padx=6)
         ttk.Button(sf, text="✕", width=3, command=lambda: self._search.set("")).pack(side=tk.LEFT)
         tk.Frame(sf, width=1, bg="#ccc").pack(side=tk.LEFT, fill=tk.Y, pady=2, padx=8)
-        ttk.Label(sf, text="Tag:").pack(side=tk.LEFT)
+        ttk.Label(sf, text="Kategorie:").pack(side=tk.LEFT)
+        self._cat_filter = tk.StringVar(value="(Alle)")
+        self._cat_cb = ttk.Combobox(sf, textvariable=self._cat_filter, width=14, state="readonly")
+        self._cat_cb.pack(side=tk.LEFT, padx=4)
+        self._cat_cb.bind("<<ComboboxSelected>>", lambda _: self._filter())
+        ttk.Label(sf, text="Tag:").pack(side=tk.LEFT, padx=(6,0))
         self._tag_filter = tk.StringVar(value="(Alle)")
-        self._tag_cb = ttk.Combobox(sf, textvariable=self._tag_filter, width=16,
-                                    state="readonly")
+        self._tag_cb = ttk.Combobox(sf, textvariable=self._tag_filter, width=14, state="readonly")
         self._tag_cb.pack(side=tk.LEFT, padx=4)
         self._tag_cb.bind("<<ComboboxSelected>>", lambda _: self._filter())
 
@@ -1341,10 +1390,11 @@ class AccountsTab(ttk.Frame):
 
     def load(self):
         self._rows = get_all_accounts()
-        # Tag-Combobox aktualisieren
         all_tags = get_all_tags()
         self._tag_cb["values"] = ["(Alle)"] + [t[1] for t in all_tags]
-        self._all_tags_list = all_tags  # [(id, name, color), ...]
+        self._all_tags_list = all_tags
+        all_cats = get_all_categories()
+        self._cat_cb["values"] = ["(Alle)"] + [c[1] for c in all_cats]
         self._filter()
 
     def _filter(self):
@@ -1359,18 +1409,21 @@ class AccountsTab(ttk.Frame):
             tag_map.setdefault(row_data[0], []).append(row_data[1])
         conn.close()
 
+        sel_cat = self._cat_filter.get()
         shown = self._rows
         if q:
             shown = [r for r in shown if any(q in str(v).lower() for v in r[1:])]
         if sel_tag != "(Alle)":
             shown = [r for r in shown if sel_tag in tag_map.get(r[0], [])]
+        if sel_cat != "(Alle)":
+            shown = [r for r in shown if (r[9] or "") == sel_cat]
 
         self._tree.delete(*self._tree.get_children())
         for r in shown:
-            _, bn, an, lu, un, _, bal, bd, notes = r
+            _, bn, an, lu, un, _, bal, bd, notes, cat = r
             tags_str = ", ".join(tag_map.get(r[0], []))
             self._tree.insert("", "end", iid=str(r[0]),
-                              values=(bn, an, lu, un, format_amount(bal), bd, tags_str, notes or ""))
+                              values=(cat or "", bn, an, lu, un, format_amount(bal), bd, tags_str, notes or ""))
         n, tot = len(shown), len(self._rows)
         self._status.set(f"{n} Einträge" + (f"  (von {tot})" if n != tot else ""))
         self._docs_panel.set_entity(None)
@@ -1406,7 +1459,7 @@ class AccountsTab(ttk.Frame):
             d = dlg.result
             new_id = insert_account(d["bank_name"], d["account_number"], d["login_url"],
                                     d["username"], d["password"], d["balance"],
-                                    d["balance_date"], d["notes"])
+                                    d["balance_date"], d["notes"], category=d.get("category", ""))
             set_entry_tags("account", new_id, d.get("tag_ids", []))
             self.load()
 
@@ -1416,20 +1469,21 @@ class AccountsTab(ttk.Frame):
             messagebox.showinfo("Hinweis", "Bitte einen Eintrag auswählen.")
             return
         r = self._row(rid)
-        _, bn, an, lu, un, pw_enc, bal, bd, notes = r
+        _, bn, an, lu, un, pw_enc, bal, bd, notes, cat = r
         dlg = AccountDialog(self.winfo_toplevel(), f"Bankkonto bearbeiten – {bn}", {
             "bank_name": bn or "", "account_number": an or "",
             "login_url": lu or "", "username": un or "",
             "password":  decrypt(pw_enc) if pw_enc else "",
             "balance":   format_amount(bal), "balance_date": bd or "", "notes": notes or "",
             "tag_ids":   [t[0] for t in get_entry_tags("account", rid)],
+            "category":  cat or "",
         })
         self.wait_window(dlg)
         if dlg.result:
             d = dlg.result
             update_account(rid, d["bank_name"], d["account_number"], d["login_url"],
                            d["username"], d["password"], d["balance"],
-                           d["balance_date"], d["notes"])
+                           d["balance_date"], d["notes"], category=d.get("category", ""))
             set_entry_tags("account", rid, d.get("tag_ids", []))
             self.load()
 
@@ -1512,10 +1566,14 @@ class ContractsTab(ttk.Frame):
         ttk.Entry(sf, textvariable=self._search, width=28).pack(side=tk.LEFT, padx=6)
         ttk.Button(sf, text="✕", width=3, command=lambda: self._search.set("")).pack(side=tk.LEFT)
         tk.Frame(sf, width=1, bg="#ccc").pack(side=tk.LEFT, fill=tk.Y, pady=2, padx=8)
-        ttk.Label(sf, text="Tag:").pack(side=tk.LEFT)
+        ttk.Label(sf, text="Kategorie:").pack(side=tk.LEFT)
+        self._cat_filter = tk.StringVar(value="(Alle)")
+        self._cat_cb = ttk.Combobox(sf, textvariable=self._cat_filter, width=14, state="readonly")
+        self._cat_cb.pack(side=tk.LEFT, padx=4)
+        self._cat_cb.bind("<<ComboboxSelected>>", lambda _: self._filter())
+        ttk.Label(sf, text="Tag:").pack(side=tk.LEFT, padx=(6,0))
         self._tag_filter = tk.StringVar(value="(Alle)")
-        self._tag_cb = ttk.Combobox(sf, textvariable=self._tag_filter, width=16,
-                                    state="readonly")
+        self._tag_cb = ttk.Combobox(sf, textvariable=self._tag_filter, width=14, state="readonly")
         self._tag_cb.pack(side=tk.LEFT, padx=4)
         self._tag_cb.bind("<<ComboboxSelected>>", lambda _: self._filter())
 
@@ -1550,10 +1608,11 @@ class ContractsTab(ttk.Frame):
 
     def load(self):
         self._rows = get_all_contracts()
-        # Tag-Combobox aktualisieren
         all_tags = get_all_tags()
         self._tag_cb["values"] = ["(Alle)"] + [t[1] for t in all_tags]
-        self._all_tags_list = all_tags  # [(id, name, color), ...]
+        self._all_tags_list = all_tags
+        all_cats = get_all_categories()
+        self._cat_cb["values"] = ["(Alle)"] + [c[1] for c in all_cats]
         self._filter()
 
     def _filter(self):
@@ -1568,11 +1627,14 @@ class ContractsTab(ttk.Frame):
             tag_map.setdefault(row_data[0], []).append(row_data[1])
         conn.close()
 
+        sel_cat = self._cat_filter.get()
         shown = self._rows
         if q:
             shown = [r for r in shown if any(q in str(v).lower() for v in r[1:])]
         if sel_tag != "(Alle)":
             shown = [r for r in shown if sel_tag in tag_map.get(r[0], [])]
+        if sel_cat != "(Alle)":
+            shown = [r for r in shown if (r[1] or "") == sel_cat]
 
         self._tree.delete(*self._tree.get_children())
         for r in shown:
