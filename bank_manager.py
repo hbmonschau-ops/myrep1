@@ -1961,6 +1961,13 @@ class SearchTab(ttk.Frame):
         super().__init__(parent)
         self._results: list = []
         self._build_ui()
+        self.load()
+
+    def load(self):
+        all_cats = get_all_categories()
+        self._cat_cb["values"] = ["(Alle)"] + [c[1] for c in all_cats]
+        all_tags = get_all_tags()
+        self._tag_cb["values"] = ["(Alle)"] + [t[1] for t in all_tags]
 
     def _build_ui(self):
         # Suchleiste
@@ -2045,11 +2052,7 @@ class SearchTab(ttk.Frame):
         contract_map = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM contracts")}
         conn.close()
 
-        # populate filter combos
-        all_cats = get_all_categories()
-        self._cat_cb["values"] = ["(Alle)"] + [c[1] for c in all_cats]
-        all_tags = get_all_tags()
-        self._tag_cb["values"] = ["(Alle)"] + [t[1] for t in all_tags]
+        self.load()
 
         self._results = rows
         self._tree.delete(*self._tree.get_children())
@@ -2219,6 +2222,12 @@ class BankManagerApp(tk.Tk):
         nb.add(self._settings_tab, text="  Einstellungen  ")
         self._search_tab = SearchTab(nb)
         nb.add(self._search_tab, text="  Suche  ")
+        nb.bind("<<NotebookTabChanged>>", lambda e: self._on_tab_change(nb))
+
+    def _on_tab_change(self, nb):
+        tab = nb.nametowidget(nb.select())
+        if hasattr(tab, "load"):
+            tab.load()
 
     def _switch_profile(self):
         self.destroy()
