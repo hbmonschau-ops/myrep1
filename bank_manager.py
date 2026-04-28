@@ -834,7 +834,7 @@ class BaseDialog(tk.Toplevel):
             row=row, column=0, sticky="w", **pad)
         var = tk.StringVar(value=self._data.get(key, ""))
         self._vars[key] = var
-        cb = ttk.Combobox(frame, textvariable=var, values=values, width=width-2, state="normal")
+        cb = ttk.Combobox(frame, textvariable=var, values=values, width=width-2, state="readonly")
         cb.grid(row=row, column=1, sticky="ew", **pad)
         return cb
 
@@ -864,7 +864,7 @@ class AccountDialog(BaseDialog):
         cats = [""] + [c[1] for c in get_all_categories()]
         self._cat_var = tk.StringVar(value=self._data.get("category", ""))
         ttk.Combobox(frame, textvariable=self._cat_var, values=cats,
-                     width=33).grid(row=7, column=1, sticky="ew", padx=10, pady=3)
+                     width=33, state="readonly").grid(row=7, column=1, sticky="ew", padx=10, pady=3)
         ttk.Label(frame, text="Notizen", anchor="w").grid(row=8, column=0, sticky="nw", padx=10, pady=3)
         self._notes = tk.Text(frame, width=34, height=3, font=("Segoe UI", 9))
         self._notes.grid(row=8, column=1, sticky="ew", padx=10, pady=3)
@@ -1964,15 +1964,8 @@ class SearchTab(ttk.Frame):
         self.load()
 
     def load(self):
-        # Kategorien aus tatsächlichen Datensätzen (nicht nur verwaltete Liste)
-        conn = sqlite3.connect(DB_PATH)
-        cats = set()
-        for row in conn.execute("SELECT DISTINCT category FROM accounts WHERE category IS NOT NULL AND category != ''"):
-            cats.add(row[0])
-        for row in conn.execute("SELECT DISTINCT category FROM contracts WHERE category IS NOT NULL AND category != ''"):
-            cats.add(row[0])
-        conn.close()
-        self._cat_cb["values"] = ["(Alle)"] + sorted(cats)
+        all_cats = get_all_categories()
+        self._cat_cb["values"] = ["(Alle)"] + [c[1] for c in all_cats]
         all_tags = get_all_tags()
         self._tag_cb["values"] = ["(Alle)"] + [t[1] for t in all_tags]
 
